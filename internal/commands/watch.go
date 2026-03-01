@@ -506,9 +506,11 @@ func (w *WatchCommands) handleVisibilityInput(s *discordgo.Session, mc *discordg
 
 	watch.Visibility = visibility
 
-	// Publicならチャンネル閲覧権限をサーバー全体(everyone)に付与
+	// Publicならチャンネル閲覧権限と履歴閲覧をサーバー全体(everyone)に付与、ただし発言は禁止
 	if visibility == models.WatchVisibilityPublic {
-		err := s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel, 0)
+		err := s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole,
+			discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory,
+			discordgo.PermissionSendMessages)
 		if err != nil {
 			log.Printf("failed to update channel permissions: %v", err)
 			_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ チャンネルの公開設定の変更に失敗しました。権限を確認してください。")
@@ -771,10 +773,15 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	if newVisibility != "" {
 		vis := models.WatchVisibility(newVisibility)
 		if vis == models.WatchVisibilityPublic {
-			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel, 0)
+			// 公開設定: 全員に閲覧と履歴表示を許可、ただし発言は禁止
+			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole,
+				discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory,
+				discordgo.PermissionSendMessages)
 			updatedFields = append(updatedFields, "公開設定 (Public)")
 		} else {
-			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, 0, discordgo.PermissionViewChannel)
+			// 非公開設定: 全員に対して閲覧権限を剥奪
+			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole,
+				0, discordgo.PermissionViewChannel)
 			updatedFields = append(updatedFields, "公開設定 (Private)")
 		}
 		watch.Visibility = vis
