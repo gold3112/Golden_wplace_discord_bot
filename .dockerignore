@@ -20,7 +20,6 @@ pkg/
 *~
 
 # Local data and secrets
-data/
 .env
 secrets/
 
