@@ -44,6 +44,12 @@ docker compose up --build -d
 - `docker compose` は `docker-compose.yml` が置かれたディレクトリで実行してください
 - `./data` が `/app/data` にマウントされ、監視設定やテンプレート画像がコンテナ再起動後も保持されます（イメージ内では空ディレクトリを自動作成）
 
+### テンプレート画像と座標
+
+- `/watch create`（またはパネルのモーダル）では、**Origin**（例: `1818-806-989-358`）と **テンプレート画像URL** を入力してください。
+- Bot は URL から画像を取得して `data/guilds/{guild_id}/template_img/{watch_id}.png` に保存します。Discord CDN など HTTPS で直接取得できるURLを使用してください。
+- テンプレート画像は透過PNGに対応し、透過以外のピクセルのみが差分判定の対象になります。
+
 ## コマンド
 
 ### ユーザーコマンド

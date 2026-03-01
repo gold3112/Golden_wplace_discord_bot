@@ -1,8 +1,13 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/png"
+	"io"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -267,6 +272,11 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		respondEphemeral(s, ic, "Origin 座標を入力してください。")
 		return
 	}
+	templateURL := strings.TrimSpace(input.TemplateURL)
+	if templateURL == "" {
+		respondEphemeral(s, ic, "テンプレート画像のURLを入力してください。")
+		return
+	}
 
 	watchType := models.WatchType(strings.ToLower(string(input.Type)))
 	if watchType != models.WatchTypeProgress && watchType != models.WatchTypeVandal {
@@ -292,6 +302,12 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	}
 
 	watchID := utils.GenerateWatchID(user.ID)
+	templateFile, err := w.saveTemplateFromURL(ic.GuildID, watchID, templateURL)
+	if err != nil {
+		respondEphemeral(s, ic, fmt.Sprintf("テンプレート画像の取得に失敗しました: %v", err))
+		return
+	}
+
 	channelName := utils.SlugifyChannelName(label)
 
 	channel, err := s.GuildChannelCreateComplex(ic.GuildID, discordgo.GuildChannelCreateData{
@@ -317,7 +333,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		ChannelID:          channel.ID,
 		Type:               watchType,
 		Origin:             origin,
-		Template:           strings.TrimSpace(input.TemplateURL),
+		Template:           templateFile,
 		ThresholdPixels:    threshold,
 		Status:             models.WatchStatusActive,
 		CreatedAt:          now,
@@ -502,4 +518,40 @@ func interactionUser(ic *discordgo.InteractionCreate) *discordgo.User {
 		return ic.Member.User
 	}
 	return ic.User
+}
+
+const maxTemplateBytes = 8 << 20 // 8MB
+
+var templateHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+func (w *WatchCommands) saveTemplateFromURL(guildID, watchID, rawURL string) (string, error) {
+	url := strings.TrimSpace(rawURL)
+	if url == "" {
+		return "", fmt.Errorf("template URL is empty")
+	}
+	resp, err := templateHTTPClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("template download failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("template download returned status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTemplateBytes))
+	if err != nil {
+		return "", fmt.Errorf("template read failed: %w", err)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("画像のデコードに失敗しました")
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return "", fmt.Errorf("PNGエンコードに失敗しました")
+	}
+	filename := fmt.Sprintf("%s.png", watchID)
+	if err := w.storage.SaveTemplateImage(guildID, filename, buf.Bytes()); err != nil {
+		return "", err
+	}
+	return filename, nil
 }

@@ -1,7 +1,6 @@
 package watchmanager
 
 import (
-	"context"
 	"log"
 	"math/rand"
 	"sync"
@@ -10,7 +9,7 @@ import (
 	"golden_wplace_discord_bot/internal/models"
 	"golden_wplace_discord_bot/internal/notifications"
 	"golden_wplace_discord_bot/internal/storage"
-	"golden_wplace_discord_bot/internal/wplace"
+	"golden_wplace_discord_bot/internal/utils"
 )
 
 func init() {
@@ -19,13 +18,13 @@ func init() {
 
 // Manager 監視スケジューラー
 type Manager struct {
-	storage   *storage.Storage
-	notifier  *notifications.Notifier
-	wplace    *wplace.Client
-	interval  time.Duration
-	mu        sync.Mutex
-	tasks     map[string]*watchTask
-	started   bool
+	storage  *storage.Storage
+	notifier *notifications.Notifier
+	limiter  *utils.RateLimiter
+	interval time.Duration
+	mu       sync.Mutex
+	tasks    map[string]*watchTask
+	started  bool
 }
 
 type watchTask struct {
@@ -36,11 +35,11 @@ type watchTask struct {
 }
 
 // NewManager 新しいManagerを作成
-func NewManager(storage *storage.Storage, notifier *notifications.Notifier, wplaceClient *wplace.Client, interval time.Duration) *Manager {
+func NewManager(storage *storage.Storage, notifier *notifications.Notifier, limiter *utils.RateLimiter, interval time.Duration) *Manager {
 	return &Manager{
 		storage:  storage,
 		notifier: notifier,
-		wplace:   wplaceClient,
+		limiter:  limiter,
 		interval: interval,
 		tasks:    make(map[string]*watchTask),
 	}
@@ -187,10 +186,7 @@ func (t *watchTask) execute() {
 	watch := t.watch
 	t.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	result, err := t.manager.wplace.CheckWatch(ctx, watch)
+	result, err := t.manager.evaluateWatch(watch)
 	now := time.Now()
 	watch.LastCheckedAt = &now
 	watch.TotalChecks++

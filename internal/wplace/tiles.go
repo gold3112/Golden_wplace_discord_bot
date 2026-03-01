@@ -51,6 +51,7 @@ func init() {
 }
 
 func detectTileURLFormat() {
+	// Test both URL formats with a known tile (0, 0)
 	formats := []string{
 		"https://backend.wplace.live/tile/%d/%d.png",
 		"https://backend.wplace.live/files/s0/tiles/%d/%d.png",
@@ -81,6 +82,7 @@ func detectTileURLFormat() {
 		log.Printf("Tile URL format %s returned status %d", format, resp.StatusCode)
 	}
 
+	// Fallback to newer format
 	tileURLFormat = formats[0]
 	log.Printf("⚠️ No working tile URL format detected, using default: %s", tileURLFormat)
 }
@@ -196,98 +198,154 @@ func downloadTilesGrid(
 	if workers > total {
 		workers = total
 	}
+	if workers <= 0 {
+		workers = 1
+	}
 
-	jobs := make(chan tileJob, total)
-	var wg sync.WaitGroup
+	jobs := make(chan tileJob, workers)
+	var workerWG sync.WaitGroup
 
-	worker := func() {
-		defer wg.Done()
-		for job := range jobs {
-			data, err := downloadTile(ctx, limiter, job.tileX, job.tileY, useCache)
-			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancel()
-				}
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			tiles[job.index] = data
-			mu.Unlock()
+	setFirstErr := func(err error) {
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
 		}
+		mu.Unlock()
 	}
 
-	wg.Add(workers)
 	for i := 0; i < workers; i++ {
-		go worker()
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			for job := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				reqCtx, cancelReq := context.WithTimeout(ctx, 15*time.Second)
+				var data []byte
+				var err error
+				if useCache {
+					data, err = DownloadTile(reqCtx, limiter, job.tileX, job.tileY)
+				} else {
+					data, err = DownloadTileNoCache(reqCtx, limiter, job.tileX, job.tileY)
+				}
+				cancelReq()
+				if err != nil {
+					setFirstErr(err)
+					return
+				}
+				tiles[job.index] = data
+			}
+		}()
 	}
 
-	index := 0
+enqueueLoop:
 	for y := 0; y < rows; y++ {
 		for x := 0; x < cols; x++ {
-			jobs <- tileJob{
+			select {
+			case <-ctx.Done():
+				break enqueueLoop
+			case jobs <- tileJob{
 				tileX: minX + x,
 				tileY: minY + y,
-				index: index,
+				index: y*cols + x,
+			}:
 			}
-			index++
 		}
 	}
 	close(jobs)
-	wg.Wait()
+	workerWG.Wait()
 
 	if firstErr != nil {
 		return nil, firstErr
 	}
-
+	for i, data := range tiles {
+		if len(data) == 0 {
+			return nil, fmt.Errorf("tile download failed (index=%d)", i)
+		}
+	}
 	return tiles, nil
 }
 
-func CombineTilesCroppedImage(tiles [][]byte, cols, rows, cropX, cropY, cropWidth, cropHeight int) (image.Image, error) {
-	if len(tiles) != cols*rows {
-		return nil, fmt.Errorf("tile count mismatch: have %d, expected %d", len(tiles), cols*rows)
+func CombineTilesImage(tilesData [][]byte, tileWidth, tileHeight, gridCols, gridRows int) (*image.NRGBA, error) {
+	if len(tilesData) == 0 {
+		return nil, fmt.Errorf("no tile data")
 	}
-
-	tileSize := 256
-	fullWidth := cols * tileSize
-	fullHeight := rows * tileSize
-
-	fullImg := image.NewRGBA(image.Rect(0, 0, fullWidth, fullHeight))
-
-	for idx, data := range tiles {
-		img, err := png.Decode(bytes.NewReader(data))
+	if len(tilesData) != gridCols*gridRows {
+		return nil, fmt.Errorf("tile data count mismatch: %d != %d", len(tilesData), gridCols*gridRows)
+	}
+	out := image.NewNRGBA(image.Rect(0, 0, tileWidth*gridCols, tileHeight*gridRows))
+	for i, data := range tilesData {
+		tile, err := png.Decode(bytes.NewReader(data))
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode tile %d: %w", idx, err)
+			return nil, fmt.Errorf("failed to decode tile index %d: %w", i, err)
 		}
+		col := i % gridCols
+		row := i / gridCols
+		dp := image.Pt(col*tileWidth, row*tileHeight)
+		draw.Draw(out, tile.Bounds().Add(dp), tile, tile.Bounds().Min, draw.Src)
+	}
+	return out, nil
+}
 
-		x := (idx % cols) * tileSize
-		y := (idx / cols) * tileSize
-		rect := image.Rect(x, y, x+tileSize, y+tileSize)
-		draw.Draw(fullImg, rect, img, image.Point{}, draw.Src)
+func CombineTilesCroppedImage(
+	tilesData [][]byte,
+	tileWidth, tileHeight, gridCols, gridRows int,
+	cropRect image.Rectangle,
+) (*image.NRGBA, error) {
+	if len(tilesData) == 0 {
+		return nil, fmt.Errorf("no tile data")
+	}
+	if len(tilesData) != gridCols*gridRows {
+		return nil, fmt.Errorf("tile data count mismatch: %d != %d", len(tilesData), gridCols*gridRows)
+	}
+	if cropRect.Dx() <= 0 || cropRect.Dy() <= 0 {
+		return nil, fmt.Errorf("invalid crop rectangle")
 	}
 
-	cropRect := image.Rect(cropX, cropY, cropX+cropWidth, cropY+cropHeight)
-	if !cropRect.In(fullImg.Bounds()) {
-		return nil, fmt.Errorf("crop rect %v out of bounds %v", cropRect, fullImg.Bounds())
+	out := image.NewNRGBA(image.Rect(0, 0, cropRect.Dx(), cropRect.Dy()))
+	for i, data := range tilesData {
+		col := i % gridCols
+		row := i / gridCols
+		tileRect := image.Rect(col*tileWidth, row*tileHeight, (col+1)*tileWidth, (row+1)*tileHeight)
+		inter := tileRect.Intersect(cropRect)
+		if inter.Dx() <= 0 || inter.Dy() <= 0 {
+			continue
+		}
+		tile, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode tile index %d: %w", i, err)
+		}
+		dstRect := image.Rect(
+			inter.Min.X-cropRect.Min.X,
+			inter.Min.Y-cropRect.Min.Y,
+			inter.Max.X-cropRect.Min.X,
+			inter.Max.Y-cropRect.Min.Y,
+		)
+		srcPt := image.Pt(inter.Min.X-tileRect.Min.X, inter.Min.Y-tileRect.Min.Y)
+		draw.Draw(out, dstRect, tile, srcPt, draw.Src)
 	}
-
-	cropped := image.NewRGBA(image.Rect(0, 0, cropWidth, cropHeight))
-	draw.Draw(cropped, cropped.Bounds(), fullImg, image.Point{X: cropX, Y: cropY}, draw.Src)
-	return cropped, nil
+	return out, nil
 }
 
 func getTileFromCache(key string) ([]byte, bool) {
+	now := time.Now()
+
 	tileCache.mu.RLock()
 	entry, ok := tileCache.items[key]
 	tileCache.mu.RUnlock()
 	if !ok {
 		return nil, false
 	}
-	if time.Now().After(entry.expiresAt) {
+
+	if now.After(entry.expiresAt) {
 		tileCache.mu.Lock()
-		delete(tileCache.items, key)
+		latest, ok := tileCache.items[key]
+		if ok && now.After(latest.expiresAt) {
+			delete(tileCache.items, key)
+		}
 		tileCache.mu.Unlock()
 		return nil, false
 	}
@@ -296,6 +354,9 @@ func getTileFromCache(key string) ([]byte, bool) {
 
 func storeTileCache(key string, data []byte) {
 	tileCache.mu.Lock()
-	tileCache.items[key] = tileCacheEntry{data: data, expiresAt: time.Now().Add(tileCacheTTL)}
-	tileCache.mu.Unlock()
+	defer tileCache.mu.Unlock()
+	tileCache.items[key] = tileCacheEntry{
+		data:      data,
+		expiresAt: time.Now().Add(tileCacheTTL),
+	}
 }
