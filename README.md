@@ -50,6 +50,7 @@ docker compose up --build -d
 - Bot はアップロードされた画像を `data/guilds/{guild_id}/template_img/{watch_id}.png` に保存し、透過していないピクセルのみを比較に利用します。
 - 座標は `タイルX-タイルY-ピクセルX-ピクセルY` 形式 (例: `1818-806-989-358`) で入力してください。
 - 通知しきい値はデフォルトで **10%**（Koukyo botと同等）です。必要に応じてチャンネルで `threshold 30` のように送信するか、`/watch settings threshold <percent>` で 10% 刻みの値に変更できます。
+- `/watch delete` や `/watch mod_delete` を実行すると監視ジョブを停止し、テンプレート画像および専用チャンネルをまとめて削除します。
 
 ## コマンド
 
@@ -58,11 +59,11 @@ docker compose up --build -d
 - `/watch status` - 自分の監視状態確認
 - `/watch pause` - 監視一時停止
 - `/watch resume` - 監視再開
-- `/watch delete` - 監視チャンネル削除
+- `/watch delete` - 監視チャンネル削除（テンプレ画像・チャンネルごと撤去）
+- `/watch settings threshold <percent>` - 通知しきい値を10%刻みで変更
 
 ### 管理者コマンド
-- `/watch admin list` - サーバー全体の監視一覧
-- `/watch admin cleanup` - 非アクティブ監視の削除
+- `/watch mod_delete user:<@target>` - Manage Channels 権限を持つモデレーターが任意の監視を強制削除（チャンネル/テンプレート含む）
 
 ## アーキテクチャ
 

@@ -215,3 +215,18 @@ func (s *Storage) SaveTemplateImage(guildID, filename string, data []byte) error
 
 	return nil
 }
+
+// DeleteTemplateImage テンプレート画像を削除
+func (s *Storage) DeleteTemplateImage(guildID, filename string) error {
+	if filename == "" {
+		return nil
+	}
+	path := s.GetTemplateImagePath(guildID, filename)
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete template image: %w", err)
+	}
+	return nil
+}

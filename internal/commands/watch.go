@@ -74,6 +74,14 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 					{Name: "threshold", Description: "通知閾値(10%%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: true},
 				},
 			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "mod_delete",
+				Description: "管理者が指定ユーザーの監視を削除",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "user", Description: "削除対象ユーザー", Type: discordgo.ApplicationCommandOptionUser, Required: true},
+				},
+			},
 		},
 	}
 
@@ -135,6 +143,8 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 		w.handleDelete(s, ic)
 	case "settings":
 		w.handleSettings(s, ic, sub.Options)
+	case "mod_delete":
+		w.handleModeratorDelete(s, ic, sub.Options)
 	}
 }
 
@@ -587,17 +597,71 @@ func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.Interac
 		return
 	}
 
-	watch.Status = models.WatchStatusDeleted
-	if err := w.storage.UpdateWatch(watch); err != nil {
-		respondEphemeral(s, ic, "削除に失敗しました。")
+	if err := w.deleteWatchAndCleanup(s, watch); err != nil {
+		respondEphemeral(s, ic, fmt.Sprintf("削除に失敗しました: %v", err))
 		return
 	}
+	respondEphemeral(s, ic, "監視を削除しました。")
+}
+
+func (w *WatchCommands) handleModeratorDelete(s *discordgo.Session, ic *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	if ic.Member == nil || !hasPermission(ic.Member, discordgo.PermissionManageChannels) {
+		respondEphemeral(s, ic, "このコマンドを実行するにはチャンネル管理権限が必要です。")
+		return
+	}
+
+	targetID := getOptionUserID(options, "user")
+	if targetID == "" {
+		respondEphemeral(s, ic, "削除対象のユーザーを指定してください。")
+		return
+	}
+
+	watch, err := w.storage.GetUserWatch(ic.GuildID, targetID)
+	if err != nil || watch == nil {
+		respondEphemeral(s, ic, "指定ユーザーの監視が見つかりません。")
+		return
+	}
+
+	if err := w.deleteWatchAndCleanup(s, watch); err != nil {
+		respondEphemeral(s, ic, fmt.Sprintf("削除に失敗しました: %v", err))
+		return
+	}
+
+	respondEphemeral(s, ic, fmt.Sprintf("ユーザー <@%s> の監視を削除しました。", targetID))
+}
+
+func (w *WatchCommands) deleteWatchAndCleanup(s *discordgo.Session, watch *models.Watch) error {
+	if watch == nil {
+		return fmt.Errorf("watch is nil")
+	}
+
+	templateName := watch.Template
+	channelID := watch.ChannelID
+
+	watch.Status = models.WatchStatusDeleted
+	watch.Template = ""
+	watch.Origin = ""
+	watch.NextScheduledCheck = time.Time{}
+
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		return err
+	}
+
 	w.manager.RemoveWatch(watch.ID)
 
-	if _, err := s.ChannelDelete(watch.ChannelID); err != nil {
-		log.Printf("failed to delete channel %s: %v", watch.ChannelID, err)
+	if templateName != "" {
+		if err := w.storage.DeleteTemplateImage(watch.GuildID, templateName); err != nil {
+			log.Printf("failed to delete template %s: %v", templateName, err)
+		}
 	}
-	respondEphemeral(s, ic, "監視を削除しました。")
+
+	if channelID != "" {
+		if _, err := s.ChannelDelete(channelID); err != nil {
+			log.Printf("failed to delete channel %s: %v", channelID, err)
+		}
+	}
+
+	return nil
 }
 
 func formatTime(t *time.Time) string {
@@ -623,6 +687,17 @@ func getOptionInt(opts []*discordgo.ApplicationCommandInteractionDataOption, nam
 		}
 	}
 	return 0
+}
+
+func getOptionUserID(opts []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
+	for _, opt := range opts {
+		if opt.Name == name {
+			if user := opt.UserValue(nil); user != nil {
+				return user.ID
+			}
+		}
+	}
+	return ""
 }
 
 func getModalValue(ic *discordgo.InteractionCreate, id string) string {
