@@ -359,8 +359,13 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	watchType := models.WatchType(strings.ToLower(string(input.Type)))
-	if watchType != models.WatchTypeProgress && watchType != models.WatchTypeVandal {
+	watchTypeInput := strings.ToLower(strings.TrimSpace(string(input.Type)))
+	var watchType models.WatchType
+
+	if strings.HasPrefix(watchTypeInput, "v") {
+		watchType = models.WatchTypeVandal
+	} else {
+		// デフォルトまたは "p" から始まる場合は Progress
 		watchType = models.WatchTypeProgress
 	}
 
@@ -420,7 +425,12 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG/WebP/JPEG)をアップロードしてください。\n**ステップ3**: 最後に、チャンネルを全体公開(Public)にするか、非公開(Private)のままにするかを選んでください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention())
+	typeLabel := "📈 Progress (進捗追跡)"
+	if watchType == models.WatchTypeVandal {
+		typeLabel = "🚨 Vandal (荒らし検知)"
+	}
+
+	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\nタイプ: **%s**\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG/WebP/JPEG)をアップロードしてください。\n**ステップ3**: 最後に、チャンネルを全体公開(Public)にするか、非公開(Private)のままにするかを選んでください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention(), typeLabel)
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
