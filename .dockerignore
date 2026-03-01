@@ -1,0 +1,29 @@
+# Build artifacts
+bin/
+build/
+*.exe
+*.out
+*.test
+
+# Go module cache
+pkg/
+
+# Version control
+.git
+.gitignore
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local data and secrets
+data/
+.env
+secrets/
+
+# Others
+.DS_Store
+Thumbs.db

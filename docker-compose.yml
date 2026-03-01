@@ -1,0 +1,15 @@
+services:
+  golden-bot:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - ../secrets/golden_wplace_bot.env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATA_DIR=/app/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
