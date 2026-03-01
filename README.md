@@ -83,6 +83,21 @@ data/guilds/{guild_id}/
   └── snapshots/             差分スナップショット
 ```
 
+## 必要な Discord 権限
+
+Bot をサーバーへ追加する際は、以下の Privileged Intents / 権限を付与してください。
+
+- **Gateway Intents**
+  - Guilds (サーバー情報取得)
+  - Guild Messages (チャンネル・メッセージ検知)
+  - Message Content (監視チャンネルでのテンプレ確認などに使用)
+- **Bot Permissions**（ロールに付与）
+  - Manage Channels: Ticket風監視チャンネルの作成・削除
+  - Read Messages / View Channels
+  - Send Messages
+  - Embed Links / Attach Files（通知に画像を添付する場合）
+  - Manage Messages（任意: ボタンや案内メッセージの後片付けなどを想定）
+
 ## 制限事項
 
 - 1ユーザーあたり1監視まで
