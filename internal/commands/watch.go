@@ -625,9 +625,9 @@ func (w *WatchCommands) handleVisibilityInput(s *discordgo.Session, mc *discordg
 		visLabel = "🌍 Public (公開)"
 	}
 
-	_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ すべてのセットアップが完了しました！\n\n設定: %s\n監視を開始します。最初の結果は数分以内に投稿されます。", visLabel))
+	_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ すべてのセットアップが完了しました！\n\n設定: %s\n監視を開始します。現在の状態を取得中...", visLabel))
 	w.manager.ScheduleWatch(watch)
-	w.manager.TriggerImmediateRun(watch)
+	go w.sendWatchNowMessage(s, watch.ChannelID, watch, "", false)
 }
 
 func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
@@ -907,7 +907,7 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	// アクティブならマネージャーを更新
 	if watch.Status == models.WatchStatusActive {
 		w.manager.ScheduleWatch(watch)
-		w.manager.TriggerImmediateRun(watch)
+		go w.sendWatchNowMessage(s, watch.ChannelID, watch, "", false)
 	}
 
 	respondEphemeral(s, ic, fmt.Sprintf("✅ 監視設定（%s）を更新しました。", strings.Join(updatedFields, "、")))

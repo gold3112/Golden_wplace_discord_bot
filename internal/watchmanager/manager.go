@@ -274,6 +274,20 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 
 	sent := 0
 
+	// 初回実行時、または大きな差分がある場合の特別処理
+	if watch.TotalNotifications == 0 && currentTier > notifications.TierNone {
+		if err := m.notifier.NotifyIncrease(watch, result, currentTier); err != nil {
+			log.Printf("initial notify increase failed for %s: %v", watch.ID, err)
+		} else {
+			sent++
+		}
+		// 初回通知済みとしてマークするために状態を更新して戻る
+		m.mu.Lock()
+		m.notifyStates[watch.ID] = &notificationState{LastTier: currentTier, WasZero: isZero}
+		m.mu.Unlock()
+		return sent
+	}
+
 	if wasZero && !isZero {
 		if err := m.notifier.NotifyRecovery(watch, result); err != nil {
 			log.Printf("notify recovery failed for %s: %v", watch.ID, err)
