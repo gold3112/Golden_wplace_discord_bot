@@ -315,7 +315,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		Type: discordgo.ChannelTypeGuildText,
 		PermissionOverwrites: []*discordgo.PermissionOverwrite{
 			{ID: ic.GuildID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
-			{ID: user.ID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory},
+			{ID: user.ID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
 		},
 	})
 	if err != nil {
