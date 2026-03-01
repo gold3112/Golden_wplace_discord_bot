@@ -32,8 +32,18 @@ func (n *Notifier) NotifyIncrease(watch *models.Watch, result *wplace.Result, ti
 		return err
 	}
 	desc := tierIncreaseDescription(tier)
-	content := fmt.Sprintf("【Wplace速報】 🚨 差分率が%sしました！[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
-	embed := BuildWatchEmbed("🏯 Wplace 荒らし検知", GetTierColor(tier), watch, result)
+	
+	content := ""
+	title := ""
+	if watch.Type == models.WatchTypeVandal {
+		content = fmt.Sprintf("【Wplace速報】 🚨 荒らし検知！差分率が%sしました。[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
+		title = "🏯 Wplace 荒らし検知"
+	} else {
+		content = fmt.Sprintf("【Wplace速報】 ⚠️ 差分が増加しました（進捗が後退した可能性があります）。[現在%.2f%%]\n対象: `%s` (%s)", result.DiffPercentage, watch.Label, desc)
+		title = "📈 Wplace 進捗後退"
+	}
+
+	embed := BuildWatchEmbed(title, GetTierColor(tier), watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
@@ -43,8 +53,18 @@ func (n *Notifier) NotifyDecrease(watch *models.Watch, result *wplace.Result, ti
 		return err
 	}
 	desc := TierRangeLabel(tier, threshold)
-	content := fmt.Sprintf("【Wplace速報】 差分率が%sまで減少しました。[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
-	embed := BuildWatchEmbed("🏯 Wplace 差分減少", GetTierColor(tier), watch, result)
+
+	content := ""
+	title := ""
+	if watch.Type == models.WatchTypeVandal {
+		content = fmt.Sprintf("【Wplace速報】 差分率が%sまで減少しました（修復された可能性があります）。[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
+		title = "🏯 Wplace 差分減少"
+	} else {
+		content = fmt.Sprintf("【Wplace速報】 ✨ 進捗更新！差分率が%sまで減少しました。[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
+		title = "📈 Wplace 進捗更新"
+	}
+
+	embed := BuildWatchEmbed(title, GetTierColor(tier), watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
