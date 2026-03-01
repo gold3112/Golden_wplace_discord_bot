@@ -448,6 +448,51 @@ func (w *WatchCommands) getOrCreateCategory(s *discordgo.Session, guildID string
 	return category.ID, nil
 }
 
+// ReorganizeChannels 既存の全監視チャンネルをカテゴリへ整理
+func (w *WatchCommands) ReorganizeChannels(s *discordgo.Session) error {
+	guildIDs, err := w.storage.ListGuildIDs()
+	if err != nil {
+		return err
+	}
+
+	for _, guildID := range guildIDs {
+		categoryID, err := w.getOrCreateCategory(s, guildID)
+		if err != nil || categoryID == "" {
+			continue
+		}
+
+		watches, err := w.storage.GetActiveWatches(guildID)
+		if err != nil {
+			continue
+		}
+
+		for _, watch := range watches {
+			if watch.ChannelID == "" {
+				continue
+			}
+
+			ch, err := s.Channel(watch.ChannelID)
+			if err != nil {
+				log.Printf("failed to fetch channel %s for reorganization: %v", watch.ChannelID, err)
+				continue
+			}
+
+			// カテゴリが未設定、または別のカテゴリにいる場合は移動
+			if ch.ParentID != categoryID {
+				_, err = s.ChannelEditComplex(watch.ChannelID, &discordgo.ChannelEdit{
+					ParentID: categoryID,
+				})
+				if err != nil {
+					log.Printf("failed to move channel %s to category %s: %v", watch.ChannelID, categoryID, err)
+				} else {
+					log.Printf("moved channel %s to category %s", watch.ChannelID, categoryID)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
 	text := strings.TrimSpace(mc.Content)
 	if text == "" {

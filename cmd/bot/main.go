@@ -58,6 +58,11 @@ func main() {
 		log.Printf("failed to start existing watches: %v", err)
 	}
 
+	// 既存チャンネルのカテゴリ整理
+	if err := watchCommands.ReorganizeChannels(dg); err != nil {
+		log.Printf("failed to reorganize channels: %v", err)
+	}
+
 	log.Println("Golden Wplace Bot is running. Press Ctrl+C to exit.")
 
 	sigCh := make(chan os.Signal, 1)
