@@ -1274,21 +1274,37 @@ func (w *WatchCommands) saveTemplateFromAttachment(guildID, watchID string, atta
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", 0, 0, fmt.Errorf("テンプレート画像の取得に失敗しました (status %d)", resp.StatusCode)
 	}
+	
+	// 一旦メモリに読み込むが、Decode前にチェックする
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTemplateBytes))
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("テンプレート画像の読み込みに失敗しました: %w", err)
 	}
+
+	// 1. DecodeConfigで寸法だけ確認（メモリ節約・巨大画像爆弾対策）
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("画像形式の読み取りに失敗しました。対応形式: PNG, WebP, JPEG, BMP")
+	}
+
+	// 総ピクセル数のチェック
+	if int64(cfg.Width)*int64(cfg.Height) > models.MaxWatchPixels {
+		return "", 0, 0, fmt.Errorf("画像が巨大すぎます (%dx%d)。最大 %d ピクセルまでです。", cfg.Width, cfg.Height, models.MaxWatchPixels)
+	}
+
+	// 2. 問題なければフルデコード
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("画像のデコードに失敗しました")
+		return "", 0, 0, fmt.Errorf("画像の解析に失敗しました")
 	}
 
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 
+	// PNGに正規化して保存（不要なメタデータ削除とセキュリティ確保）
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		return "", 0, 0, fmt.Errorf("PNGエンコードに失敗しました")
+		return "", 0, 0, fmt.Errorf("PNGへの変換に失敗しました")
 	}
 	filename := fmt.Sprintf("%s.png", watchID)
 	if err := w.storage.SaveTemplateImage(guildID, filename, buf.Bytes()); err != nil {
