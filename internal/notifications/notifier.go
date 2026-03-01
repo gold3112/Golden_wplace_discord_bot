@@ -33,7 +33,7 @@ func (n *Notifier) NotifyIncrease(watch *models.Watch, result *wplace.Result, ti
 	}
 	desc := tierIncreaseDescription(tier)
 	content := fmt.Sprintf("【Wplace速報】 🚨 差分率が%sしました！[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
-	embed := n.buildWatchEmbed("🏯 Wplace 荒らし検知", GetTierColor(tier), watch, result)
+	embed := BuildWatchEmbed("🏯 Wplace 荒らし検知", GetTierColor(tier), watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
@@ -44,7 +44,7 @@ func (n *Notifier) NotifyDecrease(watch *models.Watch, result *wplace.Result, ti
 	}
 	desc := TierRangeLabel(tier, threshold)
 	content := fmt.Sprintf("【Wplace速報】 差分率が%sまで減少しました。[現在%.2f%%]\n対象: `%s`", desc, result.DiffPercentage, watch.Label)
-	embed := n.buildWatchEmbed("🏯 Wplace 差分減少", GetTierColor(tier), watch, result)
+	embed := BuildWatchEmbed("🏯 Wplace 差分減少", GetTierColor(tier), watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
@@ -54,7 +54,7 @@ func (n *Notifier) NotifyRecovery(watch *models.Watch, result *wplace.Result) er
 		return err
 	}
 	content := fmt.Sprintf("🔔 【Wplace速報】変化検知 差分率: **%.2f%%**\n対象: `%s`", result.DiffPercentage, watch.Label)
-	embed := n.buildWatchEmbed("🟢 Wplace 変化検知", 0x00FF00, watch, result)
+	embed := BuildWatchEmbed("🟢 Wplace 変化検知", 0x00FF00, watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
@@ -64,7 +64,7 @@ func (n *Notifier) NotifyCompletion(watch *models.Watch, result *wplace.Result) 
 		return err
 	}
 	content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ 差分率: **0.00%%**\n対象: `%s`", watch.Label)
-	embed := n.buildWatchEmbed("🎉 Wplace 修復完了", 0x00FF00, watch, result)
+	embed := BuildWatchEmbed("🎉 Wplace 修復完了", 0x00FF00, watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 
@@ -75,7 +75,7 @@ func (n *Notifier) ensureSession() error {
 	return nil
 }
 
-func (n *Notifier) buildWatchEmbed(title string, color int, watch *models.Watch, result *wplace.Result) *discordgo.MessageEmbed {
+func BuildWatchEmbed(title string, color int, watch *models.Watch, result *wplace.Result) *discordgo.MessageEmbed {
 	fields := []*discordgo.MessageEmbedField{
 		{Name: "差分率", Value: fmt.Sprintf("%.2f%%", result.DiffPercentage), Inline: true},
 		{Name: "差分ピクセル", Value: fmt.Sprintf("%d / %d", result.DiffPixels, result.TemplateOpaque), Inline: true},

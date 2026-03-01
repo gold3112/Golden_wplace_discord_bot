@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"golden_wplace_discord_bot/internal/models"
@@ -127,6 +128,29 @@ func (s *Storage) GetWatchByChannel(guildID, channelID string) (*models.Watch, e
 
 	for _, watch := range guildWatches.Watches {
 		if watch.ChannelID == channelID && watch.Status != models.WatchStatusDeleted {
+			return watch, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// GetWatchByLabel ラベルから監視を取得
+func (s *Storage) GetWatchByLabel(guildID, label string) (*models.Watch, error) {
+	if label == "" {
+		return nil, nil
+	}
+
+	guildWatches, err := s.LoadGuildWatches(guildID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, watch := range guildWatches.Watches {
+		if watch.Status == models.WatchStatusDeleted {
+			continue
+		}
+		if strings.EqualFold(watch.Label, label) {
 			return watch, nil
 		}
 	}

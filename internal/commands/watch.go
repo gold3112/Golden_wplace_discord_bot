@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"golden_wplace_discord_bot/internal/models"
+	"golden_wplace_discord_bot/internal/notifications"
 	"golden_wplace_discord_bot/internal/storage"
 	"golden_wplace_discord_bot/internal/utils"
 	"golden_wplace_discord_bot/internal/watchmanager"
+	"golden_wplace_discord_bot/internal/wplace"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -27,6 +29,7 @@ const (
 )
 
 const defaultThresholdPercent = models.DefaultThresholdPercent
+const quickCommandPrefix = "w!"
 
 type watchCreateInput struct {
 	Label string
@@ -66,6 +69,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視を一時停止"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視を再開"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視を削除"},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "now", Description: "このチャンネルの監視を即時取得"},
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "settings",
@@ -90,7 +94,15 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 		Description: "監視リクエストパネルを設置 (管理者用)",
 	}
 
-	for _, cmd := range []*discordgo.ApplicationCommand{watchCmd, panelCmd} {
+	quickCmd := &discordgo.ApplicationCommand{
+		Name:        "w",
+		Description: "監視ショートカットコマンド",
+		Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "now", Description: "このチャンネルの監視を即時取得"},
+		},
+	}
+
+	for _, cmd := range []*discordgo.ApplicationCommand{watchCmd, panelCmd, quickCmd} {
 		if _, err := session.ApplicationCommandCreate(appID, "", cmd); err != nil {
 			return err
 		}
@@ -117,6 +129,8 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 		w.handleWatchCommand(s, ic, data)
 	case "createmonitor":
 		w.handleCreateMonitorCommand(s, ic)
+	case "w":
+		w.handleQuickAliasCommand(s, ic, data)
 	}
 }
 
@@ -141,10 +155,23 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 		w.handleResume(s, ic)
 	case "delete":
 		w.handleDelete(s, ic)
+	case "now":
+		w.handleNowSlash(s, ic)
 	case "settings":
 		w.handleSettings(s, ic, sub.Options)
 	case "mod_delete":
 		w.handleModeratorDelete(s, ic, sub.Options)
+	}
+}
+
+func (w *WatchCommands) handleQuickAliasCommand(s *discordgo.Session, ic *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	if len(data.Options) == 0 {
+		return
+	}
+
+	sub := data.Options[0]
+	if sub.Name == "now" {
+		w.handleNowSlash(s, ic)
 	}
 }
 
@@ -154,6 +181,9 @@ func (w *WatchCommands) HandleMessageCreate(s *discordgo.Session, mc *discordgo.
 		return
 	}
 	if mc.GuildID == "" {
+		return
+	}
+	if w.tryHandleQuickTextCommand(s, mc) {
 		return
 	}
 	watch, err := w.storage.GetWatchByChannel(mc.GuildID, mc.ChannelID)
@@ -726,6 +756,157 @@ func hasPermission(member *discordgo.Member, perm int64) bool {
 		return false
 	}
 	return member.Permissions&perm != 0
+}
+
+func (w *WatchCommands) tryHandleQuickTextCommand(s *discordgo.Session, mc *discordgo.MessageCreate) bool {
+	content := strings.TrimSpace(mc.Content)
+	if len(content) < len(quickCommandPrefix) {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(content), quickCommandPrefix) {
+		return false
+	}
+
+	payload := strings.TrimSpace(content[len(quickCommandPrefix):])
+	if payload == "" {
+		return true
+	}
+
+	if strings.EqualFold(payload, "now") {
+		watch, err := w.storage.GetWatchByChannel(mc.GuildID, mc.ChannelID)
+		if err != nil {
+			log.Printf("failed to load watch for quick now: %v", err)
+			_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 監視状況の取得に失敗しました。")
+			return true
+		}
+		if watch == nil {
+			_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ このチャンネルに稼働中の監視がありません。")
+			return true
+		}
+		w.sendWatchNowMessage(s, mc.ChannelID, watch, mc.Author.ID, false)
+		return true
+	}
+
+	target, err := w.storage.GetWatchByLabel(mc.GuildID, payload)
+	if err != nil {
+		log.Printf("failed to find watch by label %q: %v", payload, err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 監視状況の取得に失敗しました。")
+		return true
+	}
+	if target == nil {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("❌ `%s` という監視は見つかりません。", payload))
+		return true
+	}
+
+	w.sendWatchNowMessage(s, mc.ChannelID, target, mc.Author.ID, target.ChannelID != mc.ChannelID)
+	return true
+}
+
+func (w *WatchCommands) handleNowSlash(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	if ic.GuildID == "" {
+		respondEphemeral(s, ic, "ギルド内でのみ利用できます。")
+		return
+	}
+
+	watch, err := w.storage.GetWatchByChannel(ic.GuildID, ic.ChannelID)
+	if err != nil {
+		log.Printf("failed to load watch for /watch now: %v", err)
+		respondEphemeral(s, ic, "監視状況の取得に失敗しました。")
+		return
+	}
+	if watch == nil {
+		respondEphemeral(s, ic, "このチャンネルに稼働中の監視がありません。")
+		return
+	}
+
+	if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource}); err != nil {
+		log.Printf("failed to defer now command: %v", err)
+		return
+	}
+
+	result, err := w.runWatchSnapshot(watch)
+	if err != nil {
+		log.Printf("failed to run immediate snapshot: %v", err)
+		msg := fmt.Sprintf("❌ 監視の取得に失敗しました: %v", err)
+		_, _ = s.InteractionResponseEdit(ic.Interaction, &discordgo.WebhookEdit{Content: &msg})
+		return
+	}
+
+	embed := notifications.BuildWatchEmbed("🔎 現在の監視状況", 0xFFD700, watch, result)
+	if requester := interactionUser(ic); requester != nil {
+		embed.Footer = &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Requested by %s", requester.Username)}
+	}
+	files := prepareWatchResultAssets(result, embed)
+
+	edit := &discordgo.WebhookEdit{Embeds: &[]*discordgo.MessageEmbed{embed}}
+	if len(files) > 0 {
+		edit.Files = files
+	}
+
+	if _, err := s.InteractionResponseEdit(ic.Interaction, edit); err != nil {
+		log.Printf("failed to send now response: %v", err)
+	}
+}
+
+func (w *WatchCommands) sendWatchNowMessage(s *discordgo.Session, channelID string, watch *models.Watch, requesterID string, includeChannelField bool) {
+	if watch == nil {
+		_, _ = s.ChannelMessageSend(channelID, "❌ 監視が見つかりません。")
+		return
+	}
+	_ = s.ChannelTyping(channelID)
+
+	result, err := w.runWatchSnapshot(watch)
+	if err != nil {
+		log.Printf("failed to run watch snapshot: %v", err)
+		_, _ = s.ChannelMessageSend(channelID, fmt.Sprintf("❌ 監視状況を取得できませんでした: %v", err))
+		return
+	}
+
+	embed := notifications.BuildWatchEmbed("🔎 現在の監視状況", 0xFFD700, watch, result)
+	if includeChannelField {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{Name: "監視チャンネル", Value: fmt.Sprintf("<#%s>", watch.ChannelID), Inline: true})
+	}
+	if requesterID != "" {
+		embed.Footer = &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("Requested by <@%s>", requesterID)}
+	}
+	files := prepareWatchResultAssets(result, embed)
+
+	msg := &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{embed}, Files: files}
+	if _, err := s.ChannelMessageSendComplex(channelID, msg); err != nil {
+		log.Printf("failed to send watch now message: %v", err)
+	}
+}
+
+func prepareWatchResultAssets(result *wplace.Result, embed *discordgo.MessageEmbed) []*discordgo.File {
+	if result == nil || embed == nil {
+		return nil
+	}
+	if len(result.PreviewPNG) > 0 {
+		embed.Image = &discordgo.MessageEmbedImage{URL: "attachment://watch_preview.png"}
+		return []*discordgo.File{
+			{Name: "watch_preview.png", ContentType: "image/png", Reader: bytes.NewReader(result.PreviewPNG)},
+		}
+	}
+	if result.SnapshotURL != "" {
+		embed.Image = &discordgo.MessageEmbedImage{URL: result.SnapshotURL}
+	}
+	return nil
+}
+
+func (w *WatchCommands) runWatchSnapshot(watch *models.Watch) (*wplace.Result, error) {
+	if w.manager == nil {
+		return nil, fmt.Errorf("監視エンジンが初期化されていません")
+	}
+	if watch == nil {
+		return nil, fmt.Errorf("監視が見つかりません")
+	}
+	if watch.Status != models.WatchStatusActive {
+		return nil, fmt.Errorf("監視が停止中です")
+	}
+	if watch.Origin == "" || watch.Template == "" {
+		return nil, fmt.Errorf("監視のセットアップが完了していません")
+	}
+	return w.manager.RunWatchNow(watch)
 }
 
 func interactionUser(ic *discordgo.InteractionCreate) *discordgo.User {

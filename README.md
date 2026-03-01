@@ -60,10 +60,16 @@ docker compose up --build -d
 - `/watch pause` - 監視一時停止
 - `/watch resume` - 監視再開
 - `/watch delete` - 監視チャンネル削除（テンプレ画像・チャンネルごと撤去）
+- `/watch now` - 監視専用チャンネル内で即時チェックを実行し、最新の差分プレビューを取得
+- `/w now` - `/watch now` の短縮スラッシュコマンド
 - `/watch settings threshold <percent>` - 通知しきい値を10%刻みで変更
 
 ### 管理者コマンド
 - `/watch mod_delete user:<@target>` - Manage Channels 権限を持つモデレーターが任意の監視を強制削除（チャンネル/テンプレート含む）
+
+### テキストショートカット（Message Content Intent が必要）
+- `w! now` - 監視チャンネル内から即時チェックを実行
+- `w!{label名}` - どのチャンネルからでも指定ラベルの監視結果を取得し、結果を投稿チャンネルに表示
 
 ## アーキテクチャ
 

@@ -1,6 +1,7 @@
 package watchmanager
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -198,30 +199,12 @@ func (t *watchTask) updateWatch(watch *models.Watch) {
 }
 
 func (m *Manager) performWatchCheck(watch *models.Watch) {
-	if watch == nil {
-		return
-	}
-	result, err := m.evaluateWatch(watch)
-	now := time.Now()
-	watch.LastCheckedAt = &now
-	watch.TotalChecks++
-	if err != nil {
-		log.Printf("watch %s check failed: %v", watch.ID, err)
-		_ = m.storage.UpdateWatch(watch)
-		return
-	}
-
-	watch.LastDiffPixels = result.DiffPixels
-	watch.LastDiffPercentage = result.DiffPercentage
-
-	notificationsSent := 0
-	if m.notifier != nil {
-		notificationsSent = m.dispatchNotifications(watch, result)
-	}
-	watch.TotalNotifications += notificationsSent
-
-	if err := m.storage.UpdateWatch(watch); err != nil {
-		log.Printf("failed to persist watch %s: %v", watch.ID, err)
+	if _, err := m.runWatchEvaluation(watch, true); err != nil {
+		if watch != nil {
+			log.Printf("watch %s check failed: %v", watch.ID, err)
+		} else {
+			log.Printf("watch check failed: %v", err)
+		}
 	}
 }
 
@@ -230,6 +213,43 @@ func (m *Manager) TriggerImmediateRun(watch *models.Watch) {
 		return
 	}
 	go m.performWatchCheck(watch)
+}
+
+func (m *Manager) RunWatchNow(watch *models.Watch) (*wplace.Result, error) {
+	return m.runWatchEvaluation(watch, false)
+}
+
+func (m *Manager) runWatchEvaluation(watch *models.Watch, notify bool) (*wplace.Result, error) {
+	if watch == nil {
+		return nil, fmt.Errorf("watch is nil")
+	}
+	result, err := m.evaluateWatch(watch)
+	m.finalizeWatchResult(watch, result, err, notify)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (m *Manager) finalizeWatchResult(watch *models.Watch, result *wplace.Result, evalErr error, notify bool) {
+	if watch == nil {
+		return
+	}
+	now := time.Now()
+	watch.LastCheckedAt = &now
+	watch.TotalChecks++
+
+	if evalErr == nil && result != nil {
+		watch.LastDiffPixels = result.DiffPixels
+		watch.LastDiffPercentage = result.DiffPercentage
+		if notify && m.notifier != nil {
+			watch.TotalNotifications += m.dispatchNotifications(watch, result)
+		}
+	}
+
+	if err := m.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to persist watch %s: %v", watch.ID, err)
+	}
 }
 
 func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Result) int {
