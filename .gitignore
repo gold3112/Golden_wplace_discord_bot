@@ -3,8 +3,8 @@
 *.dll
 *.so
 *.dylib
-bot
-bot.exe
+/bot
+/bot.exe
 
 # Environment
 .env
