@@ -25,6 +25,7 @@ F:\Dev\VSC\go\secrets\golden_wplace_bot.env
 1. `cp .env.example ../secrets/golden_wplace_bot.env`
 2. `../secrets/golden_wplace_bot.env` を編集して `DISCORD_TOKEN` 等を設定
 
+環境変数 `WPLACE_API_BASE` を省略すると、自動で `https://backend.wplace.live` を利用します（推奨値）。
 ローカルで直接起動する場合は、ルートに `.env` を作成しても OK です。
 
 ### 実行（ローカル）

@@ -21,7 +21,7 @@ func Load() *Config {
 
 	apiBase := os.Getenv("WPLACE_API_BASE")
 	if apiBase == "" {
-		apiBase = "https://wplace.wiki"
+		apiBase = "https://backend.wplace.live"
 	}
 
 	return &Config{
