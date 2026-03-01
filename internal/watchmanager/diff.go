@@ -164,7 +164,8 @@ func applyTemplateAlphaMask(templateImg *image.NRGBA, live *image.NRGBA) *image.
 			out.Pix[oi] = live.Pix[li]
 			out.Pix[oi+1] = live.Pix[li+1]
 			out.Pix[oi+2] = live.Pix[li+2]
-			out.Pix[oi+3] = 255
+			// ライブ画像のアルファ値をそのまま使う（255固定にしない）
+			out.Pix[oi+3] = live.Pix[li+3]
 		}
 	}
 	return out
@@ -181,11 +182,21 @@ func buildDiffMask(templateImg *image.NRGBA, live *image.NRGBA) (int, *image.NRG
 	for y := 0; y < templateImg.Bounds().Dy(); y++ {
 		for x := 0; x < templateImg.Bounds().Dx(); x++ {
 			ti := y*templateImg.Stride + x*4
+			// テンプレートが透過している部分は比較対象外
 			if templateImg.Pix[ti+3] < 128 {
 				continue
 			}
 			li := y*live.Stride + x*4
-			if templateImg.Pix[ti] != live.Pix[li] || templateImg.Pix[ti+1] != live.Pix[li+1] || templateImg.Pix[ti+2] != live.Pix[li+2] {
+			
+			// 1. ライブ画像が透過している場合（タイルがない領域など）
+			// 2. RGB値が異なる場合
+			// いずれも差分としてカウント
+			isLiveTransparent := live.Pix[li+3] < 128
+			isColorDifferent := templateImg.Pix[ti] != live.Pix[li] || 
+							  templateImg.Pix[ti+1] != live.Pix[li+1] || 
+							  templateImg.Pix[ti+2] != live.Pix[li+2]
+
+			if isLiveTransparent || isColorDifferent {
 				mask.SetNRGBA(x, y, diffColor)
 				diff++
 			}
