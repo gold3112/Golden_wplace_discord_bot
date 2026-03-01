@@ -128,7 +128,7 @@ func loadTemplateNRGBA(path string) (*image.NRGBA, int, error) {
 func toNRGBA(src image.Image) *image.NRGBA {
 	b := src.Bounds()
 	out := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(out, out.Bounds(), src, b.Min, draw.Src)
+	draw.Draw(out, out.Bounds(), src, b.Min, draw.Over)
 	return out
 }
 
@@ -140,7 +140,7 @@ func countOpaque(img *image.NRGBA) int {
 	for y := 0; y < img.Bounds().Dy(); y++ {
 		for x := 0; x < img.Bounds().Dx(); x++ {
 			idx := y*img.Stride + x*4 + 3
-			if img.Pix[idx] != 0 {
+			if img.Pix[idx] >= 128 {
 				count++
 			}
 		}
@@ -156,7 +156,7 @@ func applyTemplateAlphaMask(templateImg *image.NRGBA, live *image.NRGBA) *image.
 	for y := 0; y < templateImg.Bounds().Dy(); y++ {
 		for x := 0; x < templateImg.Bounds().Dx(); x++ {
 			ti := y*templateImg.Stride + x*4
-			if templateImg.Pix[ti+3] == 0 {
+			if templateImg.Pix[ti+3] < 128 {
 				continue
 			}
 			li := y*live.Stride + x*4
@@ -181,7 +181,7 @@ func buildDiffMask(templateImg *image.NRGBA, live *image.NRGBA) (int, *image.NRG
 	for y := 0; y < templateImg.Bounds().Dy(); y++ {
 		for x := 0; x < templateImg.Bounds().Dx(); x++ {
 			ti := y*templateImg.Stride + x*4
-			if templateImg.Pix[ti+3] == 0 {
+			if templateImg.Pix[ti+3] < 128 {
 				continue
 			}
 			li := y*live.Stride + x*4
@@ -199,7 +199,7 @@ func fillOpaqueMask(mask *image.NRGBA, templateImg *image.NRGBA) {
 	for y := 0; y < templateImg.Bounds().Dy(); y++ {
 		for x := 0; x < templateImg.Bounds().Dx(); x++ {
 			idx := y*templateImg.Stride + x*4 + 3
-			if templateImg.Pix[idx] != 0 {
+			if templateImg.Pix[idx] >= 128 {
 				mask.SetNRGBA(x, y, diffColor)
 			}
 		}
