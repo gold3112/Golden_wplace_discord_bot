@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"golden_wplace_discord_bot/internal/config"
 	"golden_wplace_discord_bot/internal/models"
 	"golden_wplace_discord_bot/internal/notifications"
 	"golden_wplace_discord_bot/internal/storage"
@@ -45,11 +46,12 @@ type watchCreateInput struct {
 type WatchCommands struct {
 	storage *storage.Storage
 	manager *watchmanager.Manager
+	config  *config.Config
 }
 
 // NewWatchCommands コンストラクタ
-func NewWatchCommands(storage *storage.Storage, manager *watchmanager.Manager) *WatchCommands {
-	return &WatchCommands{storage: storage, manager: manager}
+func NewWatchCommands(storage *storage.Storage, manager *watchmanager.Manager, cfg *config.Config) *WatchCommands {
+	return &WatchCommands{storage: storage, manager: manager, config: cfg}
 }
 
 // Register スラッシュコマンド登録
@@ -376,9 +378,12 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 
 	channelName := utils.SlugifyChannelName(label)
 
+	categoryID, _ := w.getOrCreateCategory(s, ic.GuildID)
+
 	channel, err := s.GuildChannelCreateComplex(ic.GuildID, discordgo.GuildChannelCreateData{
-		Name: channelName,
-		Type: discordgo.ChannelTypeGuildText,
+		Name:     channelName,
+		Type:     discordgo.ChannelTypeGuildText,
+		ParentID: categoryID,
 		PermissionOverwrites: []*discordgo.PermissionOverwrite{
 			{ID: ic.GuildID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
 			{ID: user.ID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
@@ -415,6 +420,32 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
+}
+
+func (w *WatchCommands) getOrCreateCategory(s *discordgo.Session, guildID string) (string, error) {
+	if w.config == nil || w.config.WatchCategoryName == "" {
+		return "", nil
+	}
+
+	channels, err := s.GuildChannels(guildID)
+	if err != nil {
+		return "", err
+	}
+
+	for _, ch := range channels {
+		if ch.Type == discordgo.ChannelTypeGuildCategory && strings.EqualFold(ch.Name, w.config.WatchCategoryName) {
+			return ch.ID, nil
+		}
+	}
+
+	category, err := s.GuildChannelCreateComplex(guildID, discordgo.GuildChannelCreateData{
+		Name: w.config.WatchCategoryName,
+		Type: discordgo.ChannelTypeGuildCategory,
+	})
+	if err != nil {
+		return "", err
+	}
+	return category.ID, nil
 }
 
 func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
