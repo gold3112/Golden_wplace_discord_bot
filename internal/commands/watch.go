@@ -378,7 +378,11 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 
 	channelName := utils.SlugifyChannelName(label)
 
-	categoryID, _ := w.getOrCreateCategory(s, ic.GuildID)
+	categoryID, err := w.getOrCreateCategory(s, ic.GuildID)
+	if err != nil {
+		log.Printf("category error: %v", err)
+	}
+	log.Printf("using category %s for new channel %s", categoryID, channelName)
 
 	channel, err := s.GuildChannelCreateComplex(ic.GuildID, discordgo.GuildChannelCreateData{
 		Name:     channelName,
@@ -458,34 +462,33 @@ func (w *WatchCommands) ReorganizeChannels(s *discordgo.Session) error {
 	for _, guildID := range guildIDs {
 		categoryID, err := w.getOrCreateCategory(s, guildID)
 		if err != nil || categoryID == "" {
+			log.Printf("skipping reorganization for guild %s: category error or not configured", guildID)
 			continue
 		}
 
-		watches, err := w.storage.GetActiveWatches(guildID)
+		guildData, err := w.storage.LoadGuildWatches(guildID)
 		if err != nil {
 			continue
 		}
 
-		for _, watch := range watches {
-			if watch.ChannelID == "" {
+		for _, watch := range guildData.Watches {
+			if watch.ChannelID == "" || watch.Status == models.WatchStatusDeleted {
 				continue
 			}
 
 			ch, err := s.Channel(watch.ChannelID)
 			if err != nil {
-				log.Printf("failed to fetch channel %s for reorganization: %v", watch.ChannelID, err)
 				continue
 			}
 
 			// カテゴリが未設定、または別のカテゴリにいる場合は移動
 			if ch.ParentID != categoryID {
+				log.Printf("reorganizing channel %s (%s) to category %s", ch.Name, ch.ID, categoryID)
 				_, err = s.ChannelEditComplex(watch.ChannelID, &discordgo.ChannelEdit{
 					ParentID: categoryID,
 				})
 				if err != nil {
-					log.Printf("failed to move channel %s to category %s: %v", watch.ChannelID, categoryID, err)
-				} else {
-					log.Printf("moved channel %s to category %s", watch.ChannelID, categoryID)
+					log.Printf("failed to move channel %s: %v", watch.ChannelID, err)
 				}
 			}
 		}
