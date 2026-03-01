@@ -14,6 +14,7 @@ const (
 type WatchStatus string
 
 const (
+	WatchStatusPending WatchStatus = "pending"
 	WatchStatusActive  WatchStatus = "active"
 	WatchStatusPaused  WatchStatus = "paused"
 	WatchStatusDeleted WatchStatus = "deleted"
@@ -21,23 +22,23 @@ const (
 
 // Watch 監視設定
 type Watch struct {
-	ID                    string      `json:"id"`
-	Label                 string      `json:"label"`
-	OwnerID               string      `json:"owner_id"`
-	GuildID               string      `json:"guild_id"`
-	ChannelID             string      `json:"channel_id"`
-	Type                  WatchType   `json:"type"`
-	Origin                string      `json:"origin"` // "1818-806-989-358" format
-	Template              string      `json:"template"`
-	ThresholdPixels       int         `json:"threshold_pixels"`
-	Status                WatchStatus `json:"status"`
-	CreatedAt             time.Time   `json:"created_at"`
-	LastCheckedAt         *time.Time  `json:"last_checked_at,omitempty"`
-	LastDiffPixels        int         `json:"last_diff_pixels"`
-	LastDiffPercentage    float64     `json:"last_diff_percentage"`
-	TotalChecks           int         `json:"total_checks"`
-	TotalNotifications    int         `json:"total_notifications"`
-	NextScheduledCheck    time.Time   `json:"next_scheduled_check"`
+	ID                 string      `json:"id"`
+	Label              string      `json:"label"`
+	OwnerID            string      `json:"owner_id"`
+	GuildID            string      `json:"guild_id"`
+	ChannelID          string      `json:"channel_id"`
+	Type               WatchType   `json:"type"`
+	Origin             string      `json:"origin"` // "1818-806-989-358" format
+	Template           string      `json:"template"`
+	ThresholdPixels    int         `json:"threshold_pixels"`
+	Status             WatchStatus `json:"status"`
+	CreatedAt          time.Time   `json:"created_at"`
+	LastCheckedAt      *time.Time  `json:"last_checked_at,omitempty"`
+	LastDiffPixels     int         `json:"last_diff_pixels"`
+	LastDiffPercentage float64     `json:"last_diff_percentage"`
+	TotalChecks        int         `json:"total_checks"`
+	TotalNotifications int         `json:"total_notifications"`
+	NextScheduledCheck time.Time   `json:"next_scheduled_check"`
 }
 
 // WatchEvent 監視イベント履歴

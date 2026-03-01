@@ -84,6 +84,9 @@ func (m *Manager) scheduleLocked(watch *models.Watch) {
 	if watch == nil || watch.Status != models.WatchStatusActive {
 		return
 	}
+	if watch.Origin == "" || watch.Template == "" {
+		return
+	}
 
 	if task, ok := m.tasks[watch.ID]; ok {
 		task.updateWatch(watch)

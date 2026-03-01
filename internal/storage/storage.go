@@ -118,6 +118,22 @@ func (s *Storage) GetUserWatch(guildID, userID string) (*models.Watch, error) {
 	return nil, nil
 }
 
+// GetWatchByChannel チャンネルIDから監視を取得
+func (s *Storage) GetWatchByChannel(guildID, channelID string) (*models.Watch, error) {
+	guildWatches, err := s.LoadGuildWatches(guildID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, watch := range guildWatches.Watches {
+		if watch.ChannelID == channelID && watch.Status != models.WatchStatusDeleted {
+			return watch, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // AddWatch 監視を追加
 func (s *Storage) AddWatch(watch *models.Watch) error {
 	guildWatches, err := s.LoadGuildWatches(watch.GuildID)

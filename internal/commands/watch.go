@@ -26,11 +26,9 @@ const (
 )
 
 type watchCreateInput struct {
-	Label       string
-	Type        models.WatchType
-	Origin      string
-	Threshold   int
-	TemplateURL string
+	Label     string
+	Type      models.WatchType
+	Threshold int
 }
 
 // WatchCommands watch系スラッシュコマンド
@@ -60,9 +58,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 						{Name: "progress", Value: string(models.WatchTypeProgress)},
 						{Name: "vandal", Value: string(models.WatchTypeVandal)},
 					}},
-					{Name: "origin", Description: "Origin 座標 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: true},
 					{Name: "threshold", Description: "通知閾値(px)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
-					{Name: "template_url", Description: "テンプレート画像URL", Type: discordgo.ApplicationCommandOptionString, Required: false},
 				},
 			},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "自分の監視ステータスを表示"},
@@ -116,11 +112,9 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 	switch sub.Name {
 	case "create":
 		input := watchCreateInput{
-			Label:       getOptionString(sub.Options, "label"),
-			Type:        models.WatchType(strings.ToLower(getOptionString(sub.Options, "type"))),
-			Origin:      getOptionString(sub.Options, "origin"),
-			Threshold:   int(getOptionInt(sub.Options, "threshold")),
-			TemplateURL: getOptionString(sub.Options, "template_url"),
+			Label:     getOptionString(sub.Options, "label"),
+			Type:      models.WatchType(strings.ToLower(getOptionString(sub.Options, "type"))),
+			Threshold: int(getOptionInt(sub.Options, "threshold")),
 		}
 		w.processCreateRequest(s, ic, input)
 	case "status":
@@ -131,6 +125,35 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 		w.handleResume(s, ic)
 	case "delete":
 		w.handleDelete(s, ic)
+	}
+}
+
+// HandleMessageCreate 監視セットアップ中のメッセージを処理
+func (w *WatchCommands) HandleMessageCreate(s *discordgo.Session, mc *discordgo.MessageCreate) {
+	if mc.Author == nil || mc.Author.Bot {
+		return
+	}
+	if mc.GuildID == "" {
+		return
+	}
+	watch, err := w.storage.GetWatchByChannel(mc.GuildID, mc.ChannelID)
+	if err != nil || watch == nil {
+		return
+	}
+	if watch.OwnerID != mc.Author.ID {
+		return
+	}
+	if watch.Status == models.WatchStatusDeleted {
+		return
+	}
+
+	if watch.Origin == "" {
+		w.handleOriginInput(s, mc, watch)
+		return
+	}
+	if watch.Template == "" {
+		w.handleTemplateInput(s, mc, watch)
+		return
 	}
 }
 
@@ -211,13 +234,7 @@ func (w *WatchCommands) presentCreateModal(s *discordgo.Session, ic *discordgo.I
 					discordgo.TextInput{CustomID: "type", Label: "タイプ (progress / vandal)", Style: discordgo.TextInputShort, Required: true, Value: string(models.WatchTypeProgress)},
 				}},
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.TextInput{CustomID: "origin", Label: "Origin 座標", Style: discordgo.TextInputShort, Required: true, Placeholder: "1818-806-989-358"},
-				}},
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{CustomID: "threshold", Label: "通知閾値(px)", Style: discordgo.TextInputShort, Required: false, Placeholder: "5"},
-				}},
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.TextInput{CustomID: "template_url", Label: "テンプレート画像URL", Style: discordgo.TextInputParagraph, Required: false},
 				}},
 			},
 		},
@@ -240,11 +257,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 	}
 
 	input := watchCreateInput{
-		Label:       getModalValue(ic, "label"),
-		Type:        models.WatchType(strings.ToLower(getModalValue(ic, "type"))),
-		Origin:      getModalValue(ic, "origin"),
-		Threshold:   threshold,
-		TemplateURL: getModalValue(ic, "template_url"),
+		Label:     getModalValue(ic, "label"),
+		Type:      models.WatchType(strings.ToLower(getModalValue(ic, "type"))),
+		Threshold: threshold,
 	}
 
 	w.processCreateRequest(s, ic, input)
@@ -265,16 +280,6 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	label := strings.TrimSpace(input.Label)
 	if label == "" {
 		respondEphemeral(s, ic, "監視名を入力してください。")
-		return
-	}
-	origin := strings.TrimSpace(input.Origin)
-	if origin == "" {
-		respondEphemeral(s, ic, "Origin 座標を入力してください。")
-		return
-	}
-	templateURL := strings.TrimSpace(input.TemplateURL)
-	if templateURL == "" {
-		respondEphemeral(s, ic, "テンプレート画像のURLを入力してください。")
 		return
 	}
 
@@ -302,11 +307,6 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	}
 
 	watchID := utils.GenerateWatchID(user.ID)
-	templateFile, err := w.saveTemplateFromURL(ic.GuildID, watchID, templateURL)
-	if err != nil {
-		respondEphemeral(s, ic, fmt.Sprintf("テンプレート画像の取得に失敗しました: %v", err))
-		return
-	}
 
 	channelName := utils.SlugifyChannelName(label)
 
@@ -326,18 +326,17 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 
 	now := time.Now().UTC()
 	watch := &models.Watch{
-		ID:                 watchID,
-		Label:              label,
-		OwnerID:            user.ID,
-		GuildID:            ic.GuildID,
-		ChannelID:          channel.ID,
-		Type:               watchType,
-		Origin:             origin,
-		Template:           templateFile,
-		ThresholdPixels:    threshold,
-		Status:             models.WatchStatusActive,
-		CreatedAt:          now,
-		NextScheduledCheck: now.Add(5 * time.Minute),
+		ID:              watchID,
+		Label:           label,
+		OwnerID:         user.ID,
+		GuildID:         ic.GuildID,
+		ChannelID:       channel.ID,
+		Type:            watchType,
+		Origin:          "",
+		Template:        "",
+		ThresholdPixels: threshold,
+		Status:          models.WatchStatusPending,
+		CreatedAt:       now,
 	}
 
 	if err := w.storage.AddWatch(watch); err != nil {
@@ -345,12 +344,52 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	w.manager.ScheduleWatch(watch)
-
-	intro := fmt.Sprintf("👋 %s さん用の監視チャンネルです。\n1. テンプレート画像を添付\n2. 必要なら追加情報を記入\n監視は5分間隔で実行されます。", user.Mention())
+	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG)をこのチャンネルにアップロードしてください。\n\n両方完了すると監視が自動的に開始されます。", user.Mention())
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
+}
+
+func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
+	text := strings.TrimSpace(mc.Content)
+	if text == "" {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "座標は `タイルX-タイルY-ピクセルX-ピクセルY` 形式で入力してください。例: `1818-806-989-358`")
+		return
+	}
+	if _, err := utils.ParseOrigin(text); err != nil {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("座標の形式が正しくありません: %v", err))
+		return
+	}
+	watch.Origin = text
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to update watch origin: %v", err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "座標の保存中にエラーが発生しました。少し待って再度お試しください。")
+		return
+	}
+	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。次にテンプレート画像(PNG)をこのチャンネルにアップロードしてください。")
+}
+
+func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
+	attachment := firstImageAttachment(mc.Message.Attachments)
+	if attachment == nil {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "テンプレート画像(PNG)を添付してください。")
+		return
+	}
+	filename, err := w.saveTemplateFromAttachment(watch.GuildID, watch.ID, attachment)
+	if err != nil {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("テンプレート画像の保存に失敗しました: %v", err))
+		return
+	}
+	watch.Template = filename
+	watch.Status = models.WatchStatusActive
+	watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to update watch template: %v", err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "テンプレートの保存中にエラーが発生しました。")
+		return
+	}
+	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレート画像を登録しました。監視を開始します！")
+	w.manager.ScheduleWatch(watch)
 }
 
 func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.InteractionCreate) {
@@ -371,11 +410,22 @@ func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.Interac
 		next = watch.NextScheduledCheck.Local().Format(time.RFC1123)
 	}
 
-	status := fmt.Sprintf("状態: %s\n閾値: %dpx\n最終チェック: %s\n次回予定: %s\nチャンネル: <#%s>",
+	originState := watch.Origin
+	if originState == "" {
+		originState = "未登録"
+	}
+	templateState := "登録済み"
+	if watch.Template == "" {
+		templateState = "未登録"
+	}
+
+	status := fmt.Sprintf("状態: %s\n閾値: %dpx\n最終チェック: %s\n次回予定: %s\n座標: %s\nテンプレート: %s\nチャンネル: <#%s>",
 		watch.Status,
 		watch.ThresholdPixels,
 		formatTime(watch.LastCheckedAt),
 		next,
+		originState,
+		templateState,
 		watch.ChannelID,
 	)
 	respondEphemeral(s, ic, status)
@@ -391,6 +441,10 @@ func (w *WatchCommands) handlePause(s *discordgo.Session, ic *discordgo.Interact
 	watch, err := w.storage.GetUserWatch(ic.GuildID, user.ID)
 	if err != nil || watch == nil {
 		respondEphemeral(s, ic, "監視が見つかりません。")
+		return
+	}
+	if watch.Status == models.WatchStatusPending {
+		respondEphemeral(s, ic, "セットアップが完了していません。座標とテンプレートを登録してください。")
 		return
 	}
 	if watch.Status != models.WatchStatusActive {
@@ -417,6 +471,10 @@ func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.Interac
 	watch, err := w.storage.GetUserWatch(ic.GuildID, user.ID)
 	if err != nil || watch == nil {
 		respondEphemeral(s, ic, "監視が見つかりません。")
+		return
+	}
+	if watch.Status == models.WatchStatusPending {
+		respondEphemeral(s, ic, "セットアップが完了していません。座標とテンプレートを登録してください。")
 		return
 	}
 	if watch.Status != models.WatchStatusPaused {
@@ -524,22 +582,46 @@ const maxTemplateBytes = 8 << 20 // 8MB
 
 var templateHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-func (w *WatchCommands) saveTemplateFromURL(guildID, watchID, rawURL string) (string, error) {
-	url := strings.TrimSpace(rawURL)
+func firstImageAttachment(attachments []*discordgo.MessageAttachment) *discordgo.MessageAttachment {
+	for _, a := range attachments {
+		if a == nil {
+			continue
+		}
+		if a.ContentType == "" || strings.HasPrefix(a.ContentType, "image/") {
+			return a
+		}
+	}
+	return nil
+}
+
+func (w *WatchCommands) saveTemplateFromAttachment(guildID, watchID string, attachment *discordgo.MessageAttachment) (string, error) {
+	if attachment == nil {
+		return "", fmt.Errorf("添付ファイルが見つかりません")
+	}
+	if attachment.ContentType != "" && !strings.HasPrefix(attachment.ContentType, "image/") {
+		return "", fmt.Errorf("画像ファイルを添付してください")
+	}
+	if attachment.Size > maxTemplateBytes {
+		return "", fmt.Errorf("画像サイズが大きすぎます (最大%.1fMB)", float64(maxTemplateBytes)/(1<<20))
+	}
+	url := attachment.ProxyURL
 	if url == "" {
-		return "", fmt.Errorf("template URL is empty")
+		url = attachment.URL
+	}
+	if url == "" {
+		return "", fmt.Errorf("添付ファイルのURLを取得できません")
 	}
 	resp, err := templateHTTPClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("template download failed: %w", err)
+		return "", fmt.Errorf("テンプレート画像の取得に失敗しました: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("template download returned status %d", resp.StatusCode)
+		return "", fmt.Errorf("テンプレート画像の取得に失敗しました (status %d)", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTemplateBytes))
 	if err != nil {
-		return "", fmt.Errorf("template read failed: %w", err)
+		return "", fmt.Errorf("テンプレート画像の読み込みに失敗しました: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
