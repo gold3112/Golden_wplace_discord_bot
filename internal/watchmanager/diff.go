@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	"os"
@@ -61,12 +62,23 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	livePNG, err := encodePNG(liveImg)
+
+	maskedLive := applyTemplateAlphaMask(templateImg, liveImg)
+	diffPixels, diffMask := buildDiffMask(templateImg, liveImg)
+
+	livePNG, err := encodePNG(maskedLive)
+	if err != nil {
+		return nil, err
+	}
+	diffPNG, err := encodePNG(diffMask)
+	if err != nil {
+		return nil, err
+	}
+	previewPNG, err := buildCombinedPreview(maskedLive, diffMask)
 	if err != nil {
 		return nil, err
 	}
 
-	diffPixels := compareImages(templateImg, liveImg)
 	diffPercent := 0.0
 	if opaqueCount > 0 {
 		diffPercent = float64(diffPixels) * 100 / float64(opaqueCount)
@@ -75,12 +87,19 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 	center := utils.WatchAreaCenter(coord, width, height)
 	zoom := utils.ZoomFromImageSize(width, height)
 	snapshot := utils.BuildWplaceURL(center.Lng, center.Lat, zoom)
+	fullsize := fmt.Sprintf("%d-%d-%d-%d-%d-%d", coord.TileX, coord.TileY, coord.PixelX, coord.PixelY, width, height)
 
 	return &wplace.Result{
 		DiffPixels:     diffPixels,
 		DiffPercentage: diffPercent,
 		SnapshotURL:    snapshot,
 		LivePNG:        livePNG,
+		DiffPNG:        diffPNG,
+		PreviewPNG:     previewPNG,
+		TemplateWidth:  width,
+		TemplateHeight: height,
+		TemplateOpaque: opaqueCount,
+		FullsizeKey:    fullsize,
 	}, nil
 }
 
@@ -121,14 +140,36 @@ func countOpaque(img *image.NRGBA) int {
 	return count
 }
 
-func compareImages(templateImg, live *image.NRGBA) int {
-	if templateImg == nil || live == nil {
-		return 0
+func applyTemplateAlphaMask(templateImg *image.NRGBA, live *image.NRGBA) *image.NRGBA {
+	out := image.NewNRGBA(templateImg.Bounds())
+	if live == nil {
+		return out
 	}
-	if templateImg.Bounds() != live.Bounds() {
-		return countOpaque(templateImg)
+	for y := 0; y < templateImg.Bounds().Dy(); y++ {
+		for x := 0; x < templateImg.Bounds().Dx(); x++ {
+			ti := y*templateImg.Stride + x*4
+			if templateImg.Pix[ti+3] == 0 {
+				continue
+			}
+			li := y*live.Stride + x*4
+			oi := y*out.Stride + x*4
+			out.Pix[oi] = live.Pix[li]
+			out.Pix[oi+1] = live.Pix[li+1]
+			out.Pix[oi+2] = live.Pix[li+2]
+			out.Pix[oi+3] = 255
+		}
+	}
+	return out
+}
+
+func buildDiffMask(templateImg *image.NRGBA, live *image.NRGBA) (int, *image.NRGBA) {
+	mask := image.NewNRGBA(templateImg.Bounds())
+	if live == nil || live.Bounds() != templateImg.Bounds() {
+		fillOpaqueMask(mask, templateImg)
+		return countOpaque(templateImg), mask
 	}
 	diff := 0
+	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
 	for y := 0; y < templateImg.Bounds().Dy(); y++ {
 		for x := 0; x < templateImg.Bounds().Dx(); x++ {
 			ti := y*templateImg.Stride + x*4
@@ -137,11 +178,33 @@ func compareImages(templateImg, live *image.NRGBA) int {
 			}
 			li := y*live.Stride + x*4
 			if templateImg.Pix[ti] != live.Pix[li] || templateImg.Pix[ti+1] != live.Pix[li+1] || templateImg.Pix[ti+2] != live.Pix[li+2] {
+				mask.SetNRGBA(x, y, diffColor)
 				diff++
 			}
 		}
 	}
-	return diff
+	return diff, mask
+}
+
+func fillOpaqueMask(mask *image.NRGBA, templateImg *image.NRGBA) {
+	diffColor := color.NRGBA{R: 255, G: 0, B: 0, A: 255}
+	for y := 0; y < templateImg.Bounds().Dy(); y++ {
+		for x := 0; x < templateImg.Bounds().Dx(); x++ {
+			idx := y*templateImg.Stride + x*4 + 3
+			if templateImg.Pix[idx] != 0 {
+				mask.SetNRGBA(x, y, diffColor)
+			}
+		}
+	}
+}
+
+func buildCombinedPreview(live image.Image, diff image.Image) ([]byte, error) {
+	lw := live.Bounds().Dx()
+	lh := live.Bounds().Dy()
+	o := image.NewNRGBA(image.Rect(0, 0, lw*2, lh))
+	draw.Draw(o, image.Rect(0, 0, lw, lh), live, live.Bounds().Min, draw.Src)
+	draw.Draw(o, image.Rect(lw, 0, lw*2, lh), diff, diff.Bounds().Min, draw.Src)
+	return encodePNG(o)
 }
 
 func encodePNG(img image.Image) ([]byte, error) {

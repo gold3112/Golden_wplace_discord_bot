@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,9 +27,8 @@ const (
 )
 
 type watchCreateInput struct {
-	Label     string
-	Type      models.WatchType
-	Threshold int
+	Label string
+	Type  models.WatchType
 }
 
 // WatchCommands watch系スラッシュコマンド
@@ -58,13 +58,20 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 						{Name: "progress", Value: string(models.WatchTypeProgress)},
 						{Name: "vandal", Value: string(models.WatchTypeVandal)},
 					}},
-					{Name: "threshold", Description: "通知閾値(px)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
 				},
 			},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "自分の監視ステータスを表示"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視を一時停止"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視を再開"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視を削除"},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "settings",
+				Description: "監視設定を変更",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "threshold", Description: "通知閾値(px)", Type: discordgo.ApplicationCommandOptionInteger, Required: true},
+				},
+			},
 		},
 	}
 
@@ -112,9 +119,8 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 	switch sub.Name {
 	case "create":
 		input := watchCreateInput{
-			Label:     getOptionString(sub.Options, "label"),
-			Type:      models.WatchType(strings.ToLower(getOptionString(sub.Options, "type"))),
-			Threshold: int(getOptionInt(sub.Options, "threshold")),
+			Label: getOptionString(sub.Options, "label"),
+			Type:  models.WatchType(strings.ToLower(getOptionString(sub.Options, "type"))),
 		}
 		w.processCreateRequest(s, ic, input)
 	case "status":
@@ -125,6 +131,8 @@ func (w *WatchCommands) handleWatchCommand(s *discordgo.Session, ic *discordgo.I
 		w.handleResume(s, ic)
 	case "delete":
 		w.handleDelete(s, ic)
+	case "settings":
+		w.handleSettings(s, ic, sub.Options)
 	}
 }
 
@@ -154,6 +162,19 @@ func (w *WatchCommands) HandleMessageCreate(s *discordgo.Session, mc *discordgo.
 	if watch.Template == "" {
 		w.handleTemplateInput(s, mc, watch)
 		return
+	}
+
+	forceThreshold := watch.ThresholdPixels == 0
+	if forceThreshold {
+		if w.handleThresholdMessage(s, mc, watch, true) {
+			return
+		}
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "通知閾値を `threshold 25` のように数値で入力してください。")
+		return
+	}
+
+	if looksLikeThresholdCommand(mc.Content) {
+		w.handleThresholdMessage(s, mc, watch, false)
 	}
 }
 
@@ -233,9 +254,6 @@ func (w *WatchCommands) presentCreateModal(s *discordgo.Session, ic *discordgo.I
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{CustomID: "type", Label: "タイプ (progress / vandal)", Style: discordgo.TextInputShort, Required: true, Value: string(models.WatchTypeProgress)},
 				}},
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.TextInput{CustomID: "threshold", Label: "通知閾値(px)", Style: discordgo.TextInputShort, Required: false, Placeholder: "5"},
-				}},
 			},
 		},
 	}
@@ -249,17 +267,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 		return
 	}
 
-	threshold := 0
-	if raw := strings.TrimSpace(getModalValue(ic, "threshold")); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil {
-			threshold = v
-		}
-	}
-
 	input := watchCreateInput{
-		Label:     getModalValue(ic, "label"),
-		Type:      models.WatchType(strings.ToLower(getModalValue(ic, "type"))),
-		Threshold: threshold,
+		Label: getModalValue(ic, "label"),
+		Type:  models.WatchType(strings.ToLower(getModalValue(ic, "type"))),
 	}
 
 	w.processCreateRequest(s, ic, input)
@@ -286,14 +296,6 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	watchType := models.WatchType(strings.ToLower(string(input.Type)))
 	if watchType != models.WatchTypeProgress && watchType != models.WatchTypeVandal {
 		watchType = models.WatchTypeProgress
-	}
-
-	threshold := input.Threshold
-	if threshold <= 0 {
-		threshold = 5
-	}
-	if threshold > 500 {
-		threshold = 500
 	}
 
 	existing, err := w.storage.GetUserWatch(ic.GuildID, user.ID)
@@ -334,7 +336,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		Type:            watchType,
 		Origin:          "",
 		Template:        "",
-		ThresholdPixels: threshold,
+		ThresholdPixels: 0,
 		Status:          models.WatchStatusPending,
 		CreatedAt:       now,
 	}
@@ -344,7 +346,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG)をこのチャンネルにアップロードしてください。\n\n両方完了すると監視が自動的に開始されます。", user.Mention())
+	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG)をこのチャンネルにアップロードしてください。\n**ステップ3**: `threshold 25` など数値で通知閾値(px)を送信してください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention())
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
@@ -381,15 +383,98 @@ func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.
 		return
 	}
 	watch.Template = filename
-	watch.Status = models.WatchStatusActive
-	watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+
+	activated := false
+	if watch.ThresholdPixels > 0 && watch.Origin != "" {
+		watch.Status = models.WatchStatusActive
+		watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+		activated = true
+	} else {
+		watch.Status = models.WatchStatusPending
+	}
+
 	if err := w.storage.UpdateWatch(watch); err != nil {
 		log.Printf("failed to update watch template: %v", err)
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "テンプレートの保存中にエラーが発生しました。")
 		return
 	}
-	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレート画像を登録しました。監視を開始します！")
-	w.manager.ScheduleWatch(watch)
+
+	if activated {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ テンプレート画像を登録しました。現在の閾値は %dpx です。監視を開始します！", watch.ThresholdPixels))
+		w.manager.ScheduleWatch(watch)
+		w.manager.TriggerImmediateRun(watch)
+	} else {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレート画像を登録しました。最後に `threshold 25` のように通知閾値(px)を入力してください。")
+	}
+}
+
+func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch, force bool) bool {
+	value, ok := parseThresholdValue(mc.Content)
+	if !ok {
+		if force {
+			_, _ = s.ChannelMessageSend(mc.ChannelID, "通知閾値を `threshold 25` のように数値で入力してください。")
+			return true
+		}
+		return false
+	}
+	activated, err := w.setThresholdValue(watch, value)
+	if err != nil {
+		log.Printf("failed to set threshold: %v", err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "閾値の更新に失敗しました。少し待って再度お試しください。")
+		return true
+	}
+	if activated {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ 閾値を %dpx に設定しました。監視を開始します！", value))
+	} else {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("🔧 閾値を %dpx に更新しました。", value))
+	}
+	return true
+}
+
+func (w *WatchCommands) setThresholdValue(watch *models.Watch, value int) (bool, error) {
+	if value <= 0 {
+		return false, fmt.Errorf("閾値は1px以上で指定してください")
+	}
+	if value > 5000 {
+		value = 5000
+	}
+	watch.ThresholdPixels = value
+	newlyActive := false
+	if watch.Status == models.WatchStatusPending && watch.Origin != "" && watch.Template != "" {
+		watch.Status = models.WatchStatusActive
+		watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+		newlyActive = true
+	}
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		return false, err
+	}
+	if newlyActive {
+		w.manager.ScheduleWatch(watch)
+		w.manager.TriggerImmediateRun(watch)
+	}
+	return newlyActive, nil
+}
+
+var thresholdNumberPattern = regexp.MustCompile(`\d+`)
+
+func parseThresholdValue(content string) (int, bool) {
+	match := thresholdNumberPattern.FindString(content)
+	if match == "" {
+		return 0, false
+	}
+	val, err := strconv.Atoi(match)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
+func looksLikeThresholdCommand(content string) bool {
+	clean := strings.ToLower(strings.TrimSpace(content))
+	if strings.HasPrefix(clean, "threshold") || strings.HasPrefix(clean, "閾値") {
+		return true
+	}
+	return strings.HasSuffix(clean, "px")
 }
 
 func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.InteractionCreate) {
@@ -419,9 +504,14 @@ func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.Interac
 		templateState = "未登録"
 	}
 
-	status := fmt.Sprintf("状態: %s\n閾値: %dpx\n最終チェック: %s\n次回予定: %s\n座標: %s\nテンプレート: %s\nチャンネル: <#%s>",
+	thresholdState := "未設定"
+	if watch.ThresholdPixels > 0 {
+		thresholdState = fmt.Sprintf("%dpx", watch.ThresholdPixels)
+	}
+
+	status := fmt.Sprintf("状態: %s\n閾値: %s\n最終チェック: %s\n次回予定: %s\n座標: %s\nテンプレート: %s\nチャンネル: <#%s>",
 		watch.Status,
-		watch.ThresholdPixels,
+		thresholdState,
 		formatTime(watch.LastCheckedAt),
 		next,
 		originState,
@@ -490,6 +580,35 @@ func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.Interac
 	}
 	w.manager.ScheduleWatch(watch)
 	respondEphemeral(s, ic, "監視を再開しました。")
+}
+
+func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
+	user := interactionUser(ic)
+	if user == nil {
+		respondEphemeral(s, ic, "ユーザー情報を取得できません。")
+		return
+	}
+
+	watch, err := w.storage.GetUserWatch(ic.GuildID, user.ID)
+	if err != nil || watch == nil {
+		respondEphemeral(s, ic, "監視が見つかりません。")
+		return
+	}
+	threshold := int(getOptionInt(options, "threshold"))
+	if threshold <= 0 {
+		respondEphemeral(s, ic, "閾値は1px以上で入力してください。")
+		return
+	}
+	activated, err := w.setThresholdValue(watch, threshold)
+	if err != nil {
+		respondEphemeral(s, ic, fmt.Sprintf("閾値の更新に失敗しました: %v", err))
+		return
+	}
+	if activated {
+		respondEphemeral(s, ic, fmt.Sprintf("閾値を %dpx に設定し、監視を開始しました。", threshold))
+	} else {
+		respondEphemeral(s, ic, fmt.Sprintf("閾値を %dpx に更新しました。", threshold))
+	}
 }
 
 func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.InteractionCreate) {

@@ -6,4 +6,10 @@ type Result struct {
 	DiffPercentage float64
 	SnapshotURL    string
 	LivePNG        []byte
+	DiffPNG        []byte
+	PreviewPNG     []byte
+	TemplateWidth  int
+	TemplateHeight int
+	TemplateOpaque int
+	FullsizeKey    string
 }
