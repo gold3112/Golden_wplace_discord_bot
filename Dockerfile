@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.21 AS builder
+FROM golang:1.24-alpine AS builder
 WORKDIR /app
 
+# gitやビルドに必要なツールをインストール (alpineの場合)
+RUN apk add --no-cache git
+
 COPY go.mod go.sum ./
+# ネットワークエラー対策でプロキシを明示
+ENV GOPROXY=https://proxy.golang.org,direct
 RUN go mod download
 
 COPY . .
