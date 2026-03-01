@@ -5,4 +5,5 @@ type Result struct {
 	DiffPixels     int
 	DiffPercentage float64
 	SnapshotURL    string
+	LivePNG        []byte
 }

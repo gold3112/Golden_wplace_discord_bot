@@ -1,10 +1,12 @@
 package watchmanager
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"image/draw"
+	"image/png"
 	"os"
 	"time"
 
@@ -59,6 +61,10 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	livePNG, err := encodePNG(liveImg)
+	if err != nil {
+		return nil, err
+	}
 
 	diffPixels := compareImages(templateImg, liveImg)
 	diffPercent := 0.0
@@ -74,6 +80,7 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 		DiffPixels:     diffPixels,
 		DiffPercentage: diffPercent,
 		SnapshotURL:    snapshot,
+		LivePNG:        livePNG,
 	}, nil
 }
 
@@ -135,4 +142,12 @@ func compareImages(templateImg, live *image.NRGBA) int {
 		}
 	}
 	return diff
+}
+
+func encodePNG(img image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

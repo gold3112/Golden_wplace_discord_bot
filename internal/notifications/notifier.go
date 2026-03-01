@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"bytes"
 	"fmt"
 
 	"golden_wplace_discord_bot/internal/models"
@@ -39,9 +40,29 @@ func (n *Notifier) NotifyDiff(watch *models.Watch, result *wplace.Result) error 
 		},
 	}
 	if result.SnapshotURL != "" {
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:  "Wplace",
+			Value: fmt.Sprintf("[地図で確認](%s)", result.SnapshotURL),
+		})
+	}
+
+	files := make([]*discordgo.File, 0, 1)
+	if len(result.LivePNG) > 0 {
+		files = append(files, &discordgo.File{
+			Name:        "watch.png",
+			ContentType: "image/png",
+			Reader:      bytes.NewReader(result.LivePNG),
+		})
+		embed.Image = &discordgo.MessageEmbedImage{URL: "attachment://watch.png"}
+	} else if result.SnapshotURL != "" {
 		embed.Image = &discordgo.MessageEmbedImage{URL: result.SnapshotURL}
 	}
 
-	_, err := n.session.ChannelMessageSendComplex(watch.ChannelID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{embed}})
+	msg := &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{embed}}
+	if len(files) > 0 {
+		msg.Files = files
+	}
+
+	_, err := n.session.ChannelMessageSendComplex(watch.ChannelID, msg)
 	return err
 }
