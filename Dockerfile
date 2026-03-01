@@ -13,7 +13,7 @@ FROM gcr.io/distroless/base-debian12
 WORKDIR /app
 
 COPY --from=builder /app/bot /app/bot
-COPY --from=builder /app/data /app/data
+RUN mkdir -p /app/data
 
 ENV DATA_DIR=/app/data
 VOLUME ["/app/data"]
