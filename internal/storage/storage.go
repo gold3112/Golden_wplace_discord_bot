@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"golden_wplace_discord_bot/internal/models"
+	"golden_wplace_discord_bot/internal/utils"
 )
 
 // Storage データ永続化層
@@ -96,8 +97,8 @@ func (s *Storage) SaveGuildWatches(guildWatches *models.GuildWatches) error {
 		return fmt.Errorf("failed to marshal watches: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("failed to write watches: %w", err)
+	if err := utils.WriteFileAtomic(path, data); err != nil {
+		return fmt.Errorf("failed to write watches atomic: %w", err)
 	}
 
 	return nil
@@ -203,6 +204,29 @@ func (s *Storage) DeleteWatch(guildID, watchID string) error {
 	return fmt.Errorf("watch not found: %s", watchID)
 }
 
+// RemoveWatchRecord 監視情報を完全に削除
+func (s *Storage) RemoveWatchRecord(guildID, watchID string) error {
+	guildWatches, err := s.LoadGuildWatches(guildID)
+	if err != nil {
+		return err
+	}
+
+	index := -1
+	for i, w := range guildWatches.Watches {
+		if w.ID == watchID {
+			index = i
+			break
+		}
+	}
+
+	if index == -1 {
+		return nil
+	}
+
+	guildWatches.Watches = append(guildWatches.Watches[:index], guildWatches.Watches[index+1:]...)
+	return s.SaveGuildWatches(guildWatches)
+}
+
 // GetActiveWatches アクティブな監視を取得
 func (s *Storage) GetActiveWatches(guildID string) ([]*models.Watch, error) {
 	guildWatches, err := s.LoadGuildWatches(guildID)
@@ -233,7 +257,7 @@ func (s *Storage) SaveTemplateImage(guildID, filename string, data []byte) error
 	}
 
 	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := utils.WriteFileAtomic(path, data); err != nil {
 		return fmt.Errorf("failed to write template image: %w", err)
 	}
 

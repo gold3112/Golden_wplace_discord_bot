@@ -8,6 +8,10 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 	"os"
 	"time"
 
@@ -47,6 +51,10 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 	endPixelY := startPixelY + height
 	tilesX := (endPixelX + utils.WplaceTileSize - 1) / utils.WplaceTileSize
 	tilesY := (endPixelY + utils.WplaceTileSize - 1) / utils.WplaceTileSize
+	if tilesX*tilesY > models.MaxWatchTiles {
+		return nil, fmt.Errorf("watch covers too many tiles (%d > %d)", tilesX*tilesY, models.MaxWatchTiles)
+	}
+
 	if startTileX < 0 || startTileY < 0 || startTileX+tilesX-1 >= utils.WplaceTilesPerEdge || startTileY+tilesY-1 >= utils.WplaceTilesPerEdge {
 		return nil, fmt.Errorf("origin out of range: %s", watch.Origin)
 	}

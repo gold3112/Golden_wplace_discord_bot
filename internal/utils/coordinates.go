@@ -49,6 +49,18 @@ func ParseOrigin(value string) (*Coordinate, error) {
 	return &Coordinate{TileX: vals[0], TileY: vals[1], PixelX: vals[2], PixelY: vals[3]}, nil
 }
 
+// CountRequiredTiles calculates the total number of tiles covered by a watch area.
+func CountRequiredTiles(origin *Coordinate, width, height int) int {
+	if origin == nil || width <= 0 || height <= 0 {
+		return 0
+	}
+	startPixelX := origin.PixelX % WplaceTileSize
+	startPixelY := origin.PixelY % WplaceTileSize
+	tilesX := (startPixelX + width + WplaceTileSize - 1) / WplaceTileSize
+	tilesY := (startPixelY + height + WplaceTileSize - 1) / WplaceTileSize
+	return tilesX * tilesY
+}
+
 // BuildWplaceURL builds a wplace.live link centered at lng/lat/zoom.
 func BuildWplaceURL(lng, lat, zoom float64) string {
 	return fmt.Sprintf("https://wplace.live/?lat=%.6f&lng=%.6f&zoom=%.2f", lat, lng, zoom)

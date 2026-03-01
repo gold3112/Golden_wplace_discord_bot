@@ -3,6 +3,7 @@ package models
 import "time"
 
 const DefaultThresholdPercent = 10.0
+const MaxWatchTiles = 8
 
 // WatchType 監視タイプ
 type WatchType string
@@ -22,16 +23,25 @@ const (
 	WatchStatusDeleted WatchStatus = "deleted"
 )
 
+// WatchVisibility 公開設定
+type WatchVisibility string
+
+const (
+	WatchVisibilityPublic  WatchVisibility = "public"
+	WatchVisibilityPrivate WatchVisibility = "private"
+)
+
 // Watch 監視設定
 type Watch struct {
-	ID                 string      `json:"id"`
-	Label              string      `json:"label"`
-	OwnerID            string      `json:"owner_id"`
-	GuildID            string      `json:"guild_id"`
-	ChannelID          string      `json:"channel_id"`
-	Type               WatchType   `json:"type"`
-	Origin             string      `json:"origin"` // "1818-806-989-358" format
-	Template           string      `json:"template"`
+	ID                 string          `json:"id"`
+	Label              string          `json:"label"`
+	OwnerID            string          `json:"owner_id"`
+	GuildID            string          `json:"guild_id"`
+	ChannelID          string          `json:"channel_id"`
+	Type               WatchType       `json:"type"`
+	Visibility         WatchVisibility `json:"visibility"` // 公開・非公開
+	Origin             string          `json:"origin"`     // "1818-806-989-358" format
+	Template           string          `json:"template"`
 	ThresholdPixels    int         `json:"threshold_pixels"`
 	ThresholdPercent   float64     `json:"threshold_percent"`
 	Status             WatchStatus `json:"status"`

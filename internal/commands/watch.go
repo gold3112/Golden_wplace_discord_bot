@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,7 +80,12 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "settings",
 				Description: "監視設定を変更",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "threshold", Description: "通知閾値(10%%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: true},
+					{Name: "origin", Description: "新しい座標 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
+					{Name: "template", Description: "新しいテンプレート画像 (PNG/WebP/JPEG)", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
+					{Name: "visibility", Description: "公開設定 (public / private)", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "public (公開)", Value: "public"},
+						{Name: "private (非公開)", Value: "private"},
+					}},
 				},
 			},
 			{
@@ -205,9 +215,30 @@ func (w *WatchCommands) HandleMessageCreate(s *discordgo.Session, mc *discordgo.
 		w.handleTemplateInput(s, mc, watch)
 		return
 	}
+	if watch.Visibility == "" {
+		w.handleVisibilityInput(s, mc, watch)
+		return
+	}
 
 	if looksLikeThresholdCommand(mc.Content) {
 		w.handleThresholdMessage(s, mc, watch)
+	}
+}
+
+func (w *WatchCommands) HandleChannelDelete(s *discordgo.Session, cd *discordgo.ChannelDelete) {
+	if cd == nil || cd.Channel == nil {
+		return
+	}
+	channel := cd.Channel
+	if channel.GuildID == "" {
+		return
+	}
+	watch, err := w.storage.GetWatchByChannel(channel.GuildID, channel.ID)
+	if err != nil || watch == nil {
+		return
+	}
+	if err := w.cleanupWatchResources(s, watch, false); err != nil {
+		log.Printf("cleanup after channel delete failed: %v", err)
 	}
 }
 
@@ -380,7 +411,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG)をこのチャンネルにアップロードしてください。\n\n両方完了すると監視が自動的に開始されます。閾値はデフォルトで10%%刻みです。", user.Mention())
+	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG/WebP/JPEG)をアップロードしてください。\n**ステップ3**: 最後に、チャンネルを全体公開(Public)にするか、非公開(Private)のままにするかを選んでください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention())
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
@@ -392,17 +423,37 @@ func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.Me
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "座標は `タイルX-タイルY-ピクセルX-ピクセルY` 形式で入力してください。例: `1818-806-989-358`")
 		return
 	}
-	if _, err := utils.ParseOrigin(text); err != nil {
+	coord, err := utils.ParseOrigin(text)
+	if err != nil {
 		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("座標の形式が正しくありません: %v", err))
 		return
 	}
+
+	// テンプレートが既にある場合はタイル数をチェック
+	if watch.Template != "" {
+		templatePath := w.storage.GetTemplateImagePath(watch.GuildID, watch.Template)
+		width, height, err := getImageDimensions(templatePath)
+		if err == nil {
+			tiles := utils.CountRequiredTiles(coord, width, height)
+			if tiles > models.MaxWatchTiles {
+				_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("❌ 監視範囲が広すぎます (%dタイル)。最大 %d タイルまで許可されています。\n範囲を狭めるか、座標をタイルの境界に寄せるなどして調整してください。", tiles, models.MaxWatchTiles))
+				return
+			}
+		}
+	}
+
 	watch.Origin = text
 	if err := w.storage.UpdateWatch(watch); err != nil {
 		log.Printf("failed to update watch origin: %v", err)
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "座標の保存中にエラーが発生しました。少し待って再度お試しください。")
 		return
 	}
-	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。次にテンプレート画像(PNG)をこのチャンネルにアップロードしてください。")
+
+	if watch.Template == "" {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。次にテンプレート画像(PNG/WebP/JPEG)をアップロードしてください。")
+	} else if watch.Visibility == "" {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。\n\n**ステップ3**: 公開設定を選択してください。`Public` (または `o`)、`Private` (または `p`) と入力してください。")
+	}
 }
 
 func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
@@ -411,19 +462,25 @@ func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "テンプレート画像(PNG)を添付してください。")
 		return
 	}
-	filename, err := w.saveTemplateFromAttachment(watch.GuildID, watch.ID, attachment)
+	filename, width, height, err := w.saveTemplateFromAttachment(watch.GuildID, watch.ID, attachment)
 	if err != nil {
 		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("テンプレート画像の保存に失敗しました: %v", err))
 		return
 	}
-	watch.Template = filename
 
+	// 座標が既にある場合はタイル数をチェック
 	if watch.Origin != "" {
-		watch.Status = models.WatchStatusActive
-		watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
-	} else {
-		watch.Status = models.WatchStatusPending
+		coord, _ := utils.ParseOrigin(watch.Origin)
+		tiles := utils.CountRequiredTiles(coord, width, height)
+		if tiles > models.MaxWatchTiles {
+			// 失敗したらテンプレート保存をロールバック（削除）
+			_ = w.storage.DeleteTemplateImage(watch.GuildID, filename)
+			_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("❌ テンプレートの範囲が広すぎます (%dタイル)。最大 %d タイルまで許可されています。\n別のテンプレートを使うか、座標をタイルの境界に寄せる、あるいは画像を小さくして再アップロードしてください。", tiles, models.MaxWatchTiles))
+			return
+		}
 	}
+
+	watch.Template = filename
 
 	if err := w.storage.UpdateWatch(watch); err != nil {
 		log.Printf("failed to update watch template: %v", err)
@@ -431,13 +488,51 @@ func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.
 		return
 	}
 
-	if watch.Status == models.WatchStatusActive {
-		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ テンプレート画像を登録しました。現在の通知閾値は %.0f%% です。監視を開始します！", watch.ThresholdPercent))
-		w.manager.ScheduleWatch(watch)
-		w.manager.TriggerImmediateRun(watch)
+	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレートを登録しました。\n\n**ステップ3**: 公開設定を選択してください。\nこのチャンネルをサーバー全員に閲覧可能(Public)にする場合は `Public` (または `o`)、自分のみのまま(Private)にする場合は `Private` (または `p`) と入力してください。")
+}
+
+func (w *WatchCommands) handleVisibilityInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
+	text := strings.ToLower(strings.TrimSpace(mc.Content))
+	var visibility models.WatchVisibility
+
+	if text == "public" || text == "o" || text == "open" {
+		visibility = models.WatchVisibilityPublic
+	} else if text == "private" || text == "p" {
+		visibility = models.WatchVisibilityPrivate
 	} else {
-		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレート画像を登録しました。続いて座標を入力してください。")
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ `Public` または `Private` (または `o`/`p`) で入力してください。")
+		return
 	}
+
+	watch.Visibility = visibility
+
+	// Publicならチャンネル閲覧権限をサーバー全体(everyone)に付与
+	if visibility == models.WatchVisibilityPublic {
+		err := s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel, 0)
+		if err != nil {
+			log.Printf("failed to update channel permissions: %v", err)
+			_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ チャンネルの公開設定の変更に失敗しました。権限を確認してください。")
+			return
+		}
+	}
+
+	watch.Status = models.WatchStatusActive
+	watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to finalise watch setup: %v", err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ 設定の最終保存中にエラーが発生しました。")
+		return
+	}
+
+	visLabel := "🔒 Private (非公開)"
+	if visibility == models.WatchVisibilityPublic {
+		visLabel = "🌍 Public (公開)"
+	}
+
+	_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ すべてのセットアップが完了しました！\n\n設定: %s\n監視を開始します。最初の結果は数分以内に投稿されます。", visLabel))
+	w.manager.ScheduleWatch(watch)
+	w.manager.TriggerImmediateRun(watch)
 }
 
 func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
@@ -606,12 +701,111 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		respondEphemeral(s, ic, "監視が見つかりません。")
 		return
 	}
-	threshold := int(getOptionInt(options, "threshold"))
-	if err := w.setThresholdPercent(watch, threshold); err != nil {
-		respondEphemeral(s, ic, fmt.Sprintf("閾値の更新に失敗しました: %v", err))
+
+	newOrigin := getOptionString(options, "origin")
+	newVisibility := getOptionString(options, "visibility")
+	newTemplateID := getOptionAttachmentID(options, "template")
+	var newTemplate *discordgo.MessageAttachment
+	if newTemplateID != "" {
+		data := ic.ApplicationCommandData()
+		if data.Resolved != nil && data.Resolved.Attachments != nil {
+			newTemplate = data.Resolved.Attachments[newTemplateID]
+		}
+	}
+
+	if newOrigin == "" && newTemplate == nil && newVisibility == "" {
+		respondEphemeral(s, ic, "変更する設定（座標、テンプレート、または公開設定）を指定してください。")
 		return
 	}
-	respondEphemeral(s, ic, fmt.Sprintf("通知閾値を %d%% に更新しました。", threshold))
+
+	// 1. 座標のパース
+	var coord *utils.Coordinate
+	if newOrigin != "" {
+		coord, err = utils.ParseOrigin(newOrigin)
+		if err != nil {
+			respondEphemeral(s, ic, fmt.Sprintf("座標の形式が正しくありません: %v", err))
+			return
+		}
+	} else if watch.Origin != "" {
+		coord, _ = utils.ParseOrigin(watch.Origin)
+	}
+
+	// 2. テンプレートの保存（もしあれば）
+	var savedFilename string
+	var width, height int
+	if newTemplate != nil {
+		filename, w, h, err := w.saveTemplateFromAttachment(watch.GuildID, watch.ID, newTemplate)
+		if err != nil {
+			respondEphemeral(s, ic, fmt.Sprintf("テンプレートの保存に失敗しました: %v", err))
+			return
+		}
+		savedFilename = filename
+		width, height = w, h
+	} else if watch.Template != "" {
+		templatePath := w.storage.GetTemplateImagePath(watch.GuildID, watch.Template)
+		width, height, err = getImageDimensions(templatePath)
+		if err != nil {
+			// ファイルがないなどの異常事態
+			log.Printf("failed to get existing template size: %v", err)
+		}
+	}
+
+	// 3. タイル枚数のバリデーション（座標とテンプレの両方がある場合）
+	if coord != nil && width > 0 && height > 0 {
+		tiles := utils.CountRequiredTiles(coord, width, height)
+		if tiles > models.MaxWatchTiles {
+			if savedFilename != "" {
+				_ = w.storage.DeleteTemplateImage(watch.GuildID, savedFilename)
+			}
+			respondEphemeral(s, ic, fmt.Sprintf("❌ 監視範囲が広すぎます (%dタイル)。最大 %d タイルまで許可されています。\n範囲を狭めるか、座標を調整してください。", tiles, models.MaxWatchTiles))
+			return
+		}
+	}
+
+	// 4. 更新処理
+	updatedFields := []string{}
+	if newOrigin != "" {
+		watch.Origin = newOrigin
+		updatedFields = append(updatedFields, "座標")
+	}
+	if newVisibility != "" {
+		vis := models.WatchVisibility(newVisibility)
+		if vis == models.WatchVisibilityPublic {
+			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel, 0)
+			updatedFields = append(updatedFields, "公開設定 (Public)")
+		} else {
+			_ = s.ChannelPermissionSet(watch.ChannelID, watch.GuildID, discordgo.PermissionOverwriteTypeRole, 0, discordgo.PermissionViewChannel)
+			updatedFields = append(updatedFields, "公開設定 (Private)")
+		}
+		watch.Visibility = vis
+	}
+	if savedFilename != "" {
+		// 古い画像を削除
+		if watch.Template != "" && watch.Template != savedFilename {
+			_ = w.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
+		}
+		watch.Template = savedFilename
+		updatedFields = append(updatedFields, "テンプレート画像")
+	}
+
+	if watch.Origin != "" && watch.Template != "" && watch.Status == models.WatchStatusPending {
+		watch.Status = models.WatchStatusActive
+		watch.NextScheduledCheck = time.Now().Add(5 * time.Minute)
+		updatedFields = append(updatedFields, "監視ステータス(Active)")
+	}
+
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		respondEphemeral(s, ic, "設定の更新に失敗しました。")
+		return
+	}
+
+	// アクティブならマネージャーを更新
+	if watch.Status == models.WatchStatusActive {
+		w.manager.ScheduleWatch(watch)
+		w.manager.TriggerImmediateRun(watch)
+	}
+
+	respondEphemeral(s, ic, fmt.Sprintf("✅ 監視設定（%s）を更新しました。", strings.Join(updatedFields, "、")))
 }
 
 func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.InteractionCreate) {
@@ -661,6 +855,10 @@ func (w *WatchCommands) handleModeratorDelete(s *discordgo.Session, ic *discordg
 }
 
 func (w *WatchCommands) deleteWatchAndCleanup(s *discordgo.Session, watch *models.Watch) error {
+	return w.cleanupWatchResources(s, watch, true)
+}
+
+func (w *WatchCommands) cleanupWatchResources(s *discordgo.Session, watch *models.Watch, deleteChannel bool) error {
 	if watch == nil {
 		return fmt.Errorf("watch is nil")
 	}
@@ -685,7 +883,11 @@ func (w *WatchCommands) deleteWatchAndCleanup(s *discordgo.Session, watch *model
 		}
 	}
 
-	if channelID != "" {
+	if err := w.storage.RemoveWatchRecord(watch.GuildID, watch.ID); err != nil {
+		log.Printf("failed to purge watch %s: %v", watch.ID, err)
+	}
+
+	if deleteChannel && channelID != "" {
 		if _, err := s.ChannelDelete(channelID); err != nil {
 			log.Printf("failed to delete channel %s: %v", channelID, err)
 		}
@@ -725,6 +927,16 @@ func getOptionUserID(opts []*discordgo.ApplicationCommandInteractionDataOption, 
 			if user := opt.UserValue(nil); user != nil {
 				return user.ID
 			}
+		}
+	}
+	return ""
+}
+
+func getOptionAttachmentID(opts []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
+	for _, opt := range opts {
+		if opt.Name == name {
+			// In slash commands, attachment option value is the ID string
+			return opt.StringValue()
 		}
 	}
 	return ""
@@ -932,46 +1144,63 @@ func firstImageAttachment(attachments []*discordgo.MessageAttachment) *discordgo
 	return nil
 }
 
-func (w *WatchCommands) saveTemplateFromAttachment(guildID, watchID string, attachment *discordgo.MessageAttachment) (string, error) {
+func (w *WatchCommands) saveTemplateFromAttachment(guildID, watchID string, attachment *discordgo.MessageAttachment) (string, int, int, error) {
 	if attachment == nil {
-		return "", fmt.Errorf("添付ファイルが見つかりません")
+		return "", 0, 0, fmt.Errorf("添付ファイルが見つかりません")
 	}
 	if attachment.ContentType != "" && !strings.HasPrefix(attachment.ContentType, "image/") {
-		return "", fmt.Errorf("画像ファイルを添付してください")
+		return "", 0, 0, fmt.Errorf("画像ファイルを添付してください")
 	}
 	if attachment.Size > maxTemplateBytes {
-		return "", fmt.Errorf("画像サイズが大きすぎます (最大%.1fMB)", float64(maxTemplateBytes)/(1<<20))
+		return "", 0, 0, fmt.Errorf("画像サイズが大きすぎます (最大%.1fMB)", float64(maxTemplateBytes)/(1<<20))
 	}
 	url := attachment.ProxyURL
 	if url == "" {
 		url = attachment.URL
 	}
 	if url == "" {
-		return "", fmt.Errorf("添付ファイルのURLを取得できません")
+		return "", 0, 0, fmt.Errorf("添付ファイルのURLを取得できません")
 	}
 	resp, err := templateHTTPClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("テンプレート画像の取得に失敗しました: %w", err)
+		return "", 0, 0, fmt.Errorf("テンプレート画像の取得に失敗しました: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("テンプレート画像の取得に失敗しました (status %d)", resp.StatusCode)
+		return "", 0, 0, fmt.Errorf("テンプレート画像の取得に失敗しました (status %d)", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTemplateBytes))
 	if err != nil {
-		return "", fmt.Errorf("テンプレート画像の読み込みに失敗しました: %w", err)
+		return "", 0, 0, fmt.Errorf("テンプレート画像の読み込みに失敗しました: %w", err)
 	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return "", fmt.Errorf("画像のデコードに失敗しました")
+		return "", 0, 0, fmt.Errorf("画像のデコードに失敗しました")
 	}
+
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
-		return "", fmt.Errorf("PNGエンコードに失敗しました")
+		return "", 0, 0, fmt.Errorf("PNGエンコードに失敗しました")
 	}
 	filename := fmt.Sprintf("%s.png", watchID)
 	if err := w.storage.SaveTemplateImage(guildID, filename, buf.Bytes()); err != nil {
-		return "", err
+		return "", 0, 0, err
 	}
-	return filename, nil
+	return filename, width, height, nil
+}
+
+func getImageDimensions(path string) (int, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	config, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0, err
+	}
+	return config.Width, config.Height, nil
 }
