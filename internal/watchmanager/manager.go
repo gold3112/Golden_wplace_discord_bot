@@ -147,7 +147,7 @@ func (m *Manager) Stop() {
 }
 
 func (t *watchTask) run() {
-	initialDelay := time.Duration(rand.Intn(180)) * time.Second
+	initialDelay := time.Duration(rand.Intn(60)) * time.Second
 	if initialDelay == 0 {
 		initialDelay = 5 * time.Second
 	}
@@ -158,7 +158,7 @@ func (t *watchTask) run() {
 		select {
 		case <-timer.C:
 			t.execute()
-			next := t.manager.interval + time.Duration(rand.Intn(60))*time.Second
+			next := t.manager.interval + time.Duration(rand.Intn(30))*time.Second
 			t.resetNext(next)
 			timer.Reset(next)
 		case <-t.stopCh:

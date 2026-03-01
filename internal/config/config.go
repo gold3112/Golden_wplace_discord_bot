@@ -27,6 +27,6 @@ func Load() *Config {
 	return &Config{
 		Token:           token,
 		WplaceAPIBase:   apiBase,
-		MonitorInterval: 5,
+		MonitorInterval: 1,
 	}
 }
