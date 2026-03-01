@@ -84,6 +84,10 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Options: []*discordgo.ApplicationCommandOption{
 					{Name: "origin", Description: "新しい座標 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
 					{Name: "template", Description: "新しいテンプレート画像 (PNG/WebP/JPEG)", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
+					{Name: "type", Description: "監視タイプ (progress / vandal)", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "progress (進捗追跡)", Value: string(models.WatchTypeProgress)},
+						{Name: "vandal (荒らし検知)", Value: string(models.WatchTypeVandal)},
+					}},
 					{Name: "visibility", Description: "公開設定 (public / private)", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
 						{Name: "public (公開)", Value: "public"},
 						{Name: "private (非公開)", Value: "private"},
@@ -794,6 +798,7 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	}
 
 	newOrigin := getOptionString(options, "origin")
+	newType := getOptionString(options, "type")
 	newVisibility := getOptionString(options, "visibility")
 	newTemplateID := getOptionAttachmentID(options, "template")
 	var newTemplate *discordgo.MessageAttachment
@@ -804,8 +809,8 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		}
 	}
 
-	if newOrigin == "" && newTemplate == nil && newVisibility == "" {
-		respondEphemeral(s, ic, "変更する設定（座標、テンプレート、または公開設定）を指定してください。")
+	if newOrigin == "" && newTemplate == nil && newVisibility == "" && newType == "" {
+		respondEphemeral(s, ic, "変更する設定（座標、テンプレート、タイプ、または公開設定）を指定してください。")
 		return
 	}
 
@@ -858,6 +863,10 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	if newOrigin != "" {
 		watch.Origin = newOrigin
 		updatedFields = append(updatedFields, "座標")
+	}
+	if newType != "" {
+		watch.Type = models.WatchType(newType)
+		updatedFields = append(updatedFields, "タイプ")
 	}
 	if newVisibility != "" {
 		vis := models.WatchVisibility(newVisibility)
