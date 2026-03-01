@@ -2,6 +2,8 @@ package models
 
 import "time"
 
+const DefaultThresholdPercent = 10.0
+
 // WatchType 監視タイプ
 type WatchType string
 
@@ -31,6 +33,7 @@ type Watch struct {
 	Origin             string      `json:"origin"` // "1818-806-989-358" format
 	Template           string      `json:"template"`
 	ThresholdPixels    int         `json:"threshold_pixels"`
+	ThresholdPercent   float64     `json:"threshold_percent"`
 	Status             WatchStatus `json:"status"`
 	CreatedAt          time.Time   `json:"created_at"`
 	LastCheckedAt      *time.Time  `json:"last_checked_at,omitempty"`

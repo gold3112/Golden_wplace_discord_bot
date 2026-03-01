@@ -96,6 +96,7 @@ func (m *Manager) scheduleLocked(watch *models.Watch) {
 		return
 	}
 
+	m.ensureThresholdDefault(watch)
 	m.ensureNotificationState(watch)
 
 	if task, ok := m.tasks[watch.ID]; ok {
@@ -299,15 +300,18 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 }
 
 func calculateThresholdPercent(watch *models.Watch, opaque int) float64 {
-	if opaque <= 0 {
-		return 5.0
+	if watch == nil {
+		return models.DefaultThresholdPercent
 	}
-	if watch == nil || watch.ThresholdPixels <= 0 {
-		return 5.0
+	if watch.ThresholdPercent > 0 {
+		return watch.ThresholdPercent
+	}
+	if opaque <= 0 || watch.ThresholdPixels <= 0 {
+		return models.DefaultThresholdPercent
 	}
 	percent := float64(watch.ThresholdPixels) * 100 / float64(opaque)
-	if percent < 1 {
-		percent = 1
+	if percent < 10 {
+		percent = 10
 	}
 	if percent > 100 {
 		percent = 100
@@ -321,6 +325,19 @@ func (m *Manager) ensureNotificationState(watch *models.Watch) {
 	}
 	if _, ok := m.notifyStates[watch.ID]; !ok {
 		m.notifyStates[watch.ID] = &notificationState{LastTier: notifications.TierNone, WasZero: notifications.IsZeroDiff(watch.LastDiffPercentage)}
+	}
+}
+
+func (m *Manager) ensureThresholdDefault(watch *models.Watch) {
+	if watch == nil {
+		return
+	}
+	if watch.ThresholdPercent > 0 {
+		return
+	}
+	watch.ThresholdPercent = models.DefaultThresholdPercent
+	if err := m.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to persist default threshold for %s: %v", watch.ID, err)
 	}
 }
 
