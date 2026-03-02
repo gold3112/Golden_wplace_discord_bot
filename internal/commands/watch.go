@@ -774,7 +774,11 @@ func (w *WatchCommands) handleVisButton(s *discordgo.Session, ic *discordgo.Inte
 	}
 	wt.Visibility = vis
 	if vis == models.WatchVisibilityPublic {
-		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, discordgo.PermissionSendMessages)
+		// 公開化: @everyone に対して View と ReadHistory のみを Allow にする
+		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, 0)
+	} else {
+		// 非公開化: @everyone に対して ViewChannel を明示的に Deny にする
+		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, 0, discordgo.PermissionViewChannel)
 	}
 	wt.Status = models.WatchStatusActive
 	wt.NextScheduledCheck = time.Now().Add(1 * time.Minute)
