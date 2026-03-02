@@ -372,8 +372,8 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 		})
 	case "modal_edit_threshold":
 		val, _ := strconv.Atoi(getModalValue(ic, "threshold"))
-		if val < 10 || val > 100 || val%10 != 0 {
-			respondEphemeral(s, ic, "❌ 閾値は10〜100の間で10刻みで指定してください。")
+		if val < 1 || val > 100 {
+			respondEphemeral(s, ic, "❌ 閾値は1〜100の間で指定してください。")
 			return
 		}
 		wt.ThresholdPercent = float64(val)
@@ -818,7 +818,7 @@ func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discord
 		return
 	}
 	val, _ := strconv.Atoi(match)
-	if val >= 10 && val <= 100 && val%10 == 0 {
+	if val >= 1 && val <= 100 {
 		wt.ThresholdPercent = float64(val)
 		_ = w.storage.UpdateWatch(wt)
 		if wt.Status == models.WatchStatusActive {
@@ -826,7 +826,7 @@ func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discord
 		}
 		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("🔧 通知閾値を %d%% に変更しました。", val))
 	} else {
-		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 閾値は 10〜100 の間で 10刻みで指定してください（例: `30%%`）。")
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 閾値は 1〜100 の間で指定してください（例: `5%%`）。")
 	}
 }
 
