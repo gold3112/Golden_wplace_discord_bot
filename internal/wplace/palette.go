@@ -112,25 +112,26 @@ func HasNonPaletteColors(img *image.NRGBA) (bool, *image.NRGBA) {
 	bounds := img.Bounds()
 	out := image.NewNRGBA(bounds)
 
-	paletteMap := make(map[uint32]bool)
-	for _, p := range WplacePalette {
-		paletteMap[colorToUint32(p.RGB)] = true
-	}
-
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			c := img.NRGBAAt(x, y)
+			// 半透明ピクセルはWplaceでは扱えないため、128未満なら透明、128以上なら不透明として扱う
 			if c.A < 128 {
 				out.SetNRGBA(x, y, color.NRGBA{0, 0, 0, 0})
 				continue
 			}
 
-			u := colorToUint32(c)
-			if !paletteMap[u] {
-				hasInvalid = true
-				out.SetNRGBA(x, y, GetNearestPaletteColor(c))
+			// パレット色との最小距離を計算
+			nearest := GetNearestPaletteColor(c)
+			dist := colorDistance(c.R, c.G, c.B, nearest.R, nearest.G, nearest.B)
+
+			// 距離が 0 (完全一致) なら OK
+			// 距離が非常に小さい (例: 二乗和が 10 未満) なら、圧縮等の誤差とみなして OK とする
+			if dist < 10 {
+				out.SetNRGBA(x, y, nearest) // 誤差を修正してセット
 			} else {
-				out.SetNRGBA(x, y, c)
+				hasInvalid = true
+				out.SetNRGBA(x, y, nearest)
 			}
 		}
 	}
