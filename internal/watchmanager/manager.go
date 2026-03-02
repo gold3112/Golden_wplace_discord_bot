@@ -26,6 +26,7 @@ type Manager struct {
 	notifier     *notifications.Notifier
 	limiter      *utils.RateLimiter
 	interval     time.Duration
+	session      *discordgo.Session
 	mu           sync.Mutex
 	tasks        map[string]*watchTask
 	notifyStates map[string]*notificationState
@@ -72,12 +73,16 @@ func (m *Manager) getWatchMutex(id string) *sync.Mutex {
 // StartExisting 保存済みの監視を起動
 func (m *Manager) StartExisting(s *discordgo.Session) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.session = s
 	if m.started {
+		m.mu.Unlock()
 		return nil
 	}
 	m.started = true
+	m.mu.Unlock()
+
+	// 期限切れ監視の定期クリーンアップを開始
+	go m.startCleanupLoop()
 
 	guildIDs, err := m.storage.ListGuildIDs()
 	if err != nil {
@@ -104,6 +109,57 @@ func (m *Manager) StartExisting(s *discordgo.Session) error {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) startCleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.cleanupExpiredWatches()
+	}
+}
+
+func (m *Manager) cleanupExpiredWatches() {
+	guildIDs, err := m.storage.ListGuildIDs()
+	if err != nil {
+		return
+	}
+
+	for _, guildID := range guildIDs {
+		data, err := m.storage.LoadGuildWatches(guildID)
+		if err != nil {
+			continue
+		}
+
+		for _, watch := range data.Watches {
+			// 5分経過した Pending 監視を削除
+			if watch.Status == models.WatchStatusPending && time.Since(watch.CreatedAt) > 5*time.Minute {
+				log.Printf("Watch %s (Pending) expired. Cleaning up...", watch.ID)
+				
+				// 1. テンプレート画像削除
+				_ = m.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
+				
+				// 2. 内部レコード削除
+				_ = m.storage.RemoveWatchRecord(watch.GuildID, watch.ID)
+
+				// 3. チャンネル処理
+				m.mu.Lock()
+				sess := m.session
+				m.mu.Unlock()
+
+				if sess != nil {
+					if !watch.IsExternalChannel {
+						// ボットが作ったチャンネルなら削除
+						_, _ = sess.ChannelDelete(watch.ChannelID)
+					} else {
+						// 既存チャンネルなら案内を送って終了
+						_, _ = sess.ChannelMessageSend(watch.ChannelID, "⚠️ セットアップの制限時間（5分）が経過したため、初期化を解除しました。再度監視を行う場合は `/watch init` を実行してください。")
+					}
+				}
+			}
+		}
+	}
 }
 
 // ScheduleWatch 新規監視をスケジュール
