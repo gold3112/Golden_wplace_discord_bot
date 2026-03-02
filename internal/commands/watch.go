@@ -73,6 +73,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				},
 			},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "自分の監視ステータスを表示"},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "監視中の一覧を表示（管理者は全表示）"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視の一時停止"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視の再開"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視の削除"},
@@ -148,6 +149,8 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 			w.handleInitCommand(s, ic, sub.Options)
 		case "status":
 			w.handleStatus(s, ic)
+		case "list":
+			w.handleList(s, ic)
 		case "pause":
 			w.handlePause(s, ic)
 		case "resume":
@@ -686,6 +689,58 @@ func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discord
 	} else {
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 閾値は 10〜100 の間で 10刻みで指定してください（例: `30%`）。")
 	}
+}
+
+func (w *WatchCommands) handleList(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
+	guildID := ic.GuildID
+
+	data, err := w.storage.LoadGuildWatches(guildID)
+	if err != nil {
+		respondEphemeral(s, ic, "設定の読み込みに失敗しました。")
+		return
+	}
+
+	var sb strings.Builder
+	count := 0
+
+	for _, wt := range data.Watches {
+		if wt.Status == models.WatchStatusDeleted {
+			continue
+		}
+
+		// 管理者は全表示、一般ユーザーは自分の分のみ
+		if isAdmin || wt.OwnerID == interactionUser(ic).ID {
+			sb.WriteString(fmt.Sprintf("• **%s** | 所有者: <@%s> | チャンネル: <#%s> | 状態: `%s`\n",
+				wt.Label, wt.OwnerID, wt.ChannelID, wt.Status))
+			count++
+		}
+	}
+
+	title := "📋 あなたの監視一覧"
+	if isAdmin {
+		title = "📋 サーバー全体の監視一覧"
+	}
+
+	if count == 0 {
+		respondEphemeral(s, ic, "現在稼働中の監視はありません。")
+		return
+	}
+
+	emb := &discordgo.MessageEmbed{
+		Title:       title,
+		Description: sb.String(),
+		Color:       0x5865F2,
+		Footer:      &discordgo.MessageEmbedFooter{Text: fmt.Sprintf("合計: %d件", count)},
+	}
+
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Embeds: []*discordgo.MessageEmbed{emb},
+			Flags:  discordgo.MessageFlagsEphemeral,
+		},
+	})
 }
 
 func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.InteractionCreate) {
