@@ -32,6 +32,7 @@ type Manager struct {
 	notifyStates map[string]*notificationState
 	watchMu      map[string]*sync.Mutex // Watch IDごとの排他ロック
 	started      bool
+	OnWatchRemoved func(watchID string) // 削除時のコールバック
 }
 
 type notificationState struct {
@@ -126,6 +127,7 @@ func (m *Manager) cleanupExpiredWatches() {
 		return
 	}
 
+	var expiredIDs []string
 	for _, guildID := range guildIDs {
 		data, err := m.storage.LoadGuildWatches(guildID)
 		if err != nil {
@@ -136,12 +138,18 @@ func (m *Manager) cleanupExpiredWatches() {
 			// 5分経過した Pending 監視を削除
 			if watch.Status == models.WatchStatusPending && time.Since(watch.CreatedAt) > 5*time.Minute {
 				log.Printf("Watch %s (Pending) expired. Cleaning up...", watch.ID)
+				expiredIDs = append(expiredIDs, watch.ID)
 				
 				// 1. テンプレート画像削除
 				_ = m.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
 				
 				// 2. 内部レコード削除
 				_ = m.storage.RemoveWatchRecord(watch.GuildID, watch.ID)
+
+				// 4. コールバック実行 (キャッシュ掃除など)
+				if m.OnWatchRemoved != nil {
+					m.OnWatchRemoved(watch.ID)
+				}
 
 				// 3. チャンネル処理
 				m.mu.Lock()
@@ -159,6 +167,12 @@ func (m *Manager) cleanupExpiredWatches() {
 				}
 			}
 		}
+	}
+
+	// メモリキャッシュ(setupCache)の掃除
+	if len(expiredIDs) > 0 {
+		// commands パッケージの関数を呼び出す（循環参照に注意が必要なため、cmd/bot/main.go で調整するか、ここで直接呼べるか確認が必要）
+		// ここでは一旦コメントアウトし、ARCHITECTURE に基づき commands 側でクリーンアップが必要であることを認識します
 	}
 }
 
@@ -366,9 +380,8 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 		m.mu.Lock()
 		m.notifyStates[watch.ID] = &notificationState{LastTier: currentTier, WasZero: isZero}
 		m.mu.Unlock()
-		// finalizeWatchResult で TotalNotifications がインクリメントされるため、
-		// ここでは 0 を返して「通知は送っていないが状態は更新した」ことにする
-		return 0
+		// 次回から正常に判定されるよう、1を返して通知済みフラグ(TotalNotifications)を立てる
+		return 1
 	}
 
 	if wasZero && !isZero {

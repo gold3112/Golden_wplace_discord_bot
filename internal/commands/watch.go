@@ -367,7 +367,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 		if wt.Status == models.WatchStatusActive {
 			w.manager.ScheduleWatch(wt)
 		}
-		respondEphemeral(s, ic, "✅ 座標を更新しました。")
+		w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
+		})
 	case "modal_edit_threshold":
 		val, _ := strconv.Atoi(getModalValue(ic, "threshold"))
 		if val < 10 || val > 100 || val%10 != 0 {
@@ -376,7 +378,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 		}
 		wt.ThresholdPercent = float64(val)
 		_ = w.storage.UpdateWatch(wt)
-		respondEphemeral(s, ic, fmt.Sprintf("✅ 閾値を %d%% に更新しました。", val))
+		w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
+		})
 	}
 }
 
@@ -422,9 +426,8 @@ func (w *WatchCommands) handleToggleType(s *discordgo.Session, ic *discordgo.Int
 		wt.Type = models.WatchTypeProgress
 	}
 	_ = w.storage.UpdateWatch(wt)
-	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("✅ 監視タイプを **%s** に変更しました。", wt.Type), Flags: discordgo.MessageFlagsEphemeral},
+	w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
+		{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
 	})
 }
 
@@ -446,9 +449,8 @@ func (w *WatchCommands) handleToggleVis(s *discordgo.Session, ic *discordgo.Inte
 		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, discordgo.PermissionSendMessages)
 	}
 	_ = w.storage.UpdateWatch(wt)
-	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("✅ 公開設定を **%s** に変更しました。", wt.Visibility), Flags: discordgo.MessageFlagsEphemeral},
+	w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
+		{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
 	})
 }
 
@@ -626,6 +628,15 @@ var setupCache = struct {
 	sync.RWMutex
 	fixedImages map[string][]byte
 }{fixedImages: make(map[string][]byte)}
+
+// CleanupSetupCache 有効期限切れの画像キャッシュを削除
+func CleanupSetupCache(expiredWatchIDs []string) {
+	setupCache.Lock()
+	defer setupCache.Unlock()
+	for _, id := range expiredWatchIDs {
+		delete(setupCache.fixedImages, id)
+	}
+}
 
 func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
 	att := firstImageAttachment(mc.Message.Attachments)

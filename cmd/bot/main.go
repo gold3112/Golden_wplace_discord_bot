@@ -37,6 +37,9 @@ func main() {
 	watchLimiter := utils.NewRateLimiter(4)
 	defer watchLimiter.Close()
 	manager := watchmanager.NewManager(storage, notifier, watchLimiter, watchInterval)
+	manager.OnWatchRemoved = func(watchID string) {
+		commands.CleanupSetupCache([]string{watchID})
+	}
 
 	watchCommands := commands.NewWatchCommands(storage, manager, cfg)
 	dg.AddHandler(watchCommands.HandleInteraction)
