@@ -1,6 +1,7 @@
 package wplace
 
 import (
+	"image"
 	"image/color"
 	"math"
 )
@@ -103,6 +104,41 @@ func GetNearestPaletteColor(c color.Color) color.NRGBA {
 	}
 
 	return nearest
+}
+
+// HasNonPaletteColors 画像内に公式パレット外の色が含まれているかチェックし、補正後の画像も返す
+func HasNonPaletteColors(img *image.NRGBA) (bool, *image.NRGBA) {
+	hasInvalid := false
+	bounds := img.Bounds()
+	out := image.NewNRGBA(bounds)
+
+	paletteMap := make(map[uint32]bool)
+	for _, p := range WplacePalette {
+		paletteMap[colorToUint32(p.RGB)] = true
+	}
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := img.NRGBAAt(x, y)
+			if c.A < 128 {
+				out.SetNRGBA(x, y, color.NRGBA{0, 0, 0, 0})
+				continue
+			}
+
+			u := colorToUint32(c)
+			if !paletteMap[u] {
+				hasInvalid = true
+				out.SetNRGBA(x, y, GetNearestPaletteColor(c))
+			} else {
+				out.SetNRGBA(x, y, c)
+			}
+		}
+	}
+	return hasInvalid, out
+}
+
+func colorToUint32(c color.NRGBA) uint32 {
+	return uint32(c.R)<<16 | uint32(c.G)<<8 | uint32(c.B)
 }
 
 func colorDistance(r1, g1, b1, r2, g2, b2 uint8) float64 {
