@@ -27,6 +27,7 @@ type Manager struct {
 	mu           sync.Mutex
 	tasks        map[string]*watchTask
 	notifyStates map[string]*notificationState
+	watchMu      map[string]*sync.Mutex // Watch IDごとの排他ロック
 	started      bool
 }
 
@@ -51,7 +52,19 @@ func NewManager(storage *storage.Storage, notifier *notifications.Notifier, limi
 		interval:     interval,
 		tasks:        make(map[string]*watchTask),
 		notifyStates: make(map[string]*notificationState),
+		watchMu:      make(map[string]*sync.Mutex),
 	}
+}
+
+func (m *Manager) getWatchMutex(id string) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mu, ok := m.watchMu[id]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	m.watchMu[id] = mu
+	return mu
 }
 
 // StartExisting 保存済みの監視を起動
@@ -223,6 +236,12 @@ func (m *Manager) runWatchEvaluation(watch *models.Watch, notify bool) (*wplace.
 	if watch == nil {
 		return nil, fmt.Errorf("watch is nil")
 	}
+
+	// Watch ID ごとに排他ロックを取得
+	mu := m.getWatchMutex(watch.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	result, err := m.evaluateWatch(watch)
 	m.finalizeWatchResult(watch, result, err, notify)
 	if err != nil {
@@ -294,6 +313,8 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 		} else {
 			sent++
 		}
+		// 0からの復帰時はTier通知をスキップ（NotifyRecoveryで事足りるため）
+		goto finalize
 	}
 	if !wasZero && isZero {
 		if err := m.notifier.NotifyCompletion(watch, result); err != nil {
@@ -301,6 +322,8 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 		} else {
 			sent++
 		}
+		// 0到達時はTier通知をスキップ
+		goto finalize
 	}
 
 	if currentTier > lastTier && currentTier > notifications.TierNone {
@@ -321,6 +344,7 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 		}
 	}
 
+finalize:
 	m.mu.Lock()
 	if state, ok := m.notifyStates[watch.ID]; ok {
 		state.LastTier = currentTier
@@ -358,7 +382,15 @@ func (m *Manager) ensureNotificationState(watch *models.Watch) {
 		return
 	}
 	if _, ok := m.notifyStates[watch.ID]; !ok {
-		m.notifyStates[watch.ID] = &notificationState{LastTier: notifications.TierNone, WasZero: notifications.IsZeroDiff(watch.LastDiffPercentage)}
+		threshold := watch.ThresholdPercent
+		if threshold <= 0 {
+			threshold = models.DefaultThresholdPercent
+		}
+		// 保存されている前回の差分率から、通知済みのTierを復元する
+		m.notifyStates[watch.ID] = &notificationState{
+			LastTier: notifications.CalculateTier(watch.LastDiffPercentage, threshold),
+			WasZero:  notifications.IsZeroDiff(watch.LastDiffPercentage),
+		}
 	}
 }
 

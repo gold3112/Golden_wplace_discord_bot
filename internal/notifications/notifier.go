@@ -83,8 +83,16 @@ func (n *Notifier) NotifyCompletion(watch *models.Watch, result *wplace.Result) 
 	if err := n.ensureSession(); err != nil {
 		return err
 	}
+
+	title := "🎉 Wplace 修復完了"
 	content := fmt.Sprintf("✅ 【Wplace速報】修復完了！ 差分率: **0.00%%**\n対象: `%s`", watch.Label)
-	embed := BuildWatchEmbed("🎉 Wplace 修復完了", 0x00FF00, watch, result)
+
+	if watch.Type == models.WatchTypeProgress {
+		title = "🎉 Wplace 作品完成"
+		content = fmt.Sprintf("✅ 【Wplace速報】作品が完成しました！ 差分率: **0.00%%**\n対象: `%s`", watch.Label)
+	}
+
+	embed := BuildWatchEmbed(title, 0x00FF00, watch, result)
 	return n.sendWatchMessage(watch.ChannelID, content, embed, result)
 }
 

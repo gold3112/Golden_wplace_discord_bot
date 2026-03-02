@@ -40,7 +40,7 @@ func ParseOrigin(value string) (*Coordinate, error) {
 	}
 	vals := make([]int, 4)
 	for i, part := range parts {
-		v, err := strconv.Atoi(part)
+		v, err := strconv.Atoi(strings.TrimSpace(part))
 		if err != nil {
 			return nil, fmt.Errorf("invalid origin value: %s", value)
 		}

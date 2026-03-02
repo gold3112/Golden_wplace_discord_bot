@@ -161,30 +161,63 @@ func (s *Storage) GetWatchByLabel(guildID, label string) (*models.Watch, error) 
 
 // AddWatch 監視を追加
 func (s *Storage) AddWatch(watch *models.Watch) error {
-	guildWatches, err := s.LoadGuildWatches(watch.GuildID)
-	if err != nil {
-		return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.GetGuildWatchesPath(watch.GuildID)
+	var guildWatches models.GuildWatches
+	data, err := os.ReadFile(path)
+	if err == nil {
+		_ = json.Unmarshal(data, &guildWatches)
+	} else if os.IsNotExist(err) {
+		guildWatches.GuildID = watch.GuildID
+	} else {
+		return fmt.Errorf("failed to read watches: %w", err)
 	}
 
 	guildWatches.Watches = append(guildWatches.Watches, watch)
-	return s.SaveGuildWatches(guildWatches)
+	
+	marshaled, err := json.MarshalIndent(guildWatches, "", "  ")
+	if err != nil {
+		return err
+	}
+	return utils.WriteFileAtomic(path, marshaled)
 }
 
 // UpdateWatch 監視を更新
 func (s *Storage) UpdateWatch(watch *models.Watch) error {
-	guildWatches, err := s.LoadGuildWatches(watch.GuildID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.GetGuildWatchesPath(watch.GuildID)
+	data, err := os.ReadFile(path)
 	if err != nil {
+		return fmt.Errorf("failed to read watches: %w", err)
+	}
+
+	var guildWatches models.GuildWatches
+	if err := json.Unmarshal(data, &guildWatches); err != nil {
 		return err
 	}
 
+	found := false
 	for i, w := range guildWatches.Watches {
 		if w.ID == watch.ID {
 			guildWatches.Watches[i] = watch
-			return s.SaveGuildWatches(guildWatches)
+			found = true
+			break
 		}
 	}
 
-	return fmt.Errorf("watch not found: %s", watch.ID)
+	if !found {
+		return fmt.Errorf("watch not found: %s", watch.ID)
+	}
+
+	marshaled, err := json.MarshalIndent(guildWatches, "", "  ")
+	if err != nil {
+		return err
+	}
+	return utils.WriteFileAtomic(path, marshaled)
 }
 
 // DeleteWatch 監視を削除（論理削除）
