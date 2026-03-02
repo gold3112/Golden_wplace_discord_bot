@@ -104,7 +104,23 @@ func (s *Storage) SaveGuildWatches(guildWatches *models.GuildWatches) error {
 	return nil
 }
 
-// GetUserWatch ユーザーの監視を取得
+// CountUserWatches ユーザーの有効な監視数をカウント
+func (s *Storage) CountUserWatches(guildID, userID string) (int, error) {
+	guildWatches, err := s.LoadGuildWatches(guildID)
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, watch := range guildWatches.Watches {
+		if watch.OwnerID == userID && watch.Status != models.WatchStatusDeleted {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// GetUserWatch ユーザーの最初の監視を取得 (互換性のため維持)
 func (s *Storage) GetUserWatch(guildID, userID string) (*models.Watch, error) {
 	guildWatches, err := s.LoadGuildWatches(guildID)
 	if err != nil {

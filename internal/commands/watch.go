@@ -481,9 +481,9 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		return
 	}
 
-	existing, _ := w.storage.GetUserWatch(ic.GuildID, user.ID)
-	if existing != nil && existing.Status != models.WatchStatusDeleted {
-		respondEphemeral(s, ic, "既に監視チャンネルが存在します。`/watch status` で確認してください。")
+	existingCount, _ := w.storage.CountUserWatches(ic.GuildID, user.ID)
+	if existingCount >= models.MaxUserWatches {
+		respondEphemeral(s, ic, fmt.Sprintf("❌ 監視上限（%d個）に達しています。新しい監視を始めるには既存のものを削除してください。", models.MaxUserWatches))
 		return
 	}
 

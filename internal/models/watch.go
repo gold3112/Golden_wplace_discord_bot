@@ -5,6 +5,7 @@ import "time"
 const DefaultThresholdPercent = 10.0
 const MaxWatchTiles = 8
 const MaxWatchPixels = 10000000 // 10MP (e.g. 4000x2500)
+const MaxUserWatches = 3        // 1ユーザーあたりの最大監視数
 
 // WatchType 監視タイプ
 type WatchType string
