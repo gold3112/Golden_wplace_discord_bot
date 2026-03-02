@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var channelSlugRegex = regexp.MustCompile(`[^a-z0-9-]+`)
+var channelInvalidRegex = regexp.MustCompile(`[\\/:\*\?"<>\|.,;!@#$%^&()\[\]{}=+~` + "`" + `]+`)
 
 // GenerateWatchID watch IDを生成
 func GenerateWatchID(userID string) string {
@@ -30,15 +30,22 @@ func RandomSuffix() string {
 
 // SlugifyChannelName Discordチャンネル名に使えるスラッグを生成
 func SlugifyChannelName(label string) string {
+	// Discordのチャンネル名は現在Unicode（日本語など）を広くサポートしています。
+	// ここでは記号などを除外する程度に留めます。
 	slug := strings.ToLower(label)
 	slug = strings.ReplaceAll(slug, " ", "-")
-	slug = channelSlugRegex.ReplaceAllString(slug, "")
+	slug = channelInvalidRegex.ReplaceAllString(slug, "")
 	slug = strings.Trim(slug, "-")
+	
 	if slug == "" {
 		slug = "watch"
 	}
-	if len(slug) > 90 {
-		slug = slug[:90]
+	
+	// 長さ制限 (Discordの上限は100文字だが余裕を持たせる)
+	if len([]rune(slug)) > 80 {
+		runes := []rune(slug)
+		slug = string(runes[:80])
 	}
+	
 	return fmt.Sprintf("%s-%s", slug, RandomSuffix())
 }
