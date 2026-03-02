@@ -378,6 +378,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 		}
 		wt.ThresholdPercent = float64(val)
 		_ = w.storage.UpdateWatch(wt)
+		if wt.Status == models.WatchStatusActive {
+			w.manager.ScheduleWatch(wt)
+		}
 		w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
 			{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
 		})
@@ -426,6 +429,9 @@ func (w *WatchCommands) handleToggleType(s *discordgo.Session, ic *discordgo.Int
 		wt.Type = models.WatchTypeProgress
 	}
 	_ = w.storage.UpdateWatch(wt)
+	if wt.Status == models.WatchStatusActive {
+		w.manager.ScheduleWatch(wt)
+	}
 	w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
 		{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
 	})
@@ -443,12 +449,17 @@ func (w *WatchCommands) handleToggleVis(s *discordgo.Session, ic *discordgo.Inte
 	}
 	if wt.Visibility == models.WatchVisibilityPublic {
 		wt.Visibility = models.WatchVisibilityPrivate
-		_ = s.ChannelPermissionDelete(wt.ChannelID, wt.GuildID)
+		// 非公開化: @everyone に対して ViewChannel を明示的に Deny にする
+		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, 0, discordgo.PermissionViewChannel)
 	} else {
 		wt.Visibility = models.WatchVisibilityPublic
-		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, discordgo.PermissionSendMessages)
+		// 公開化: @everyone に対して View と ReadHistory のみを Allow にする
+		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, 0)
 	}
 	_ = w.storage.UpdateWatch(wt)
+	if wt.Status == models.WatchStatusActive {
+		w.manager.ScheduleWatch(wt)
+	}
 	w.handleSettings(s, ic, []*discordgo.ApplicationCommandInteractionDataOption{
 		{Name: "label", Type: discordgo.ApplicationCommandOptionString, Value: wt.Label},
 	})
@@ -805,9 +816,12 @@ func (w *WatchCommands) handleThresholdMessage(s *discordgo.Session, mc *discord
 	if val >= 10 && val <= 100 && val%10 == 0 {
 		wt.ThresholdPercent = float64(val)
 		_ = w.storage.UpdateWatch(wt)
+		if wt.Status == models.WatchStatusActive {
+			w.manager.ScheduleWatch(wt) // 実行中のタスクに即座に反映
+		}
 		_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("🔧 通知閾値を %d%% に変更しました。", val))
 	} else {
-		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 閾値は 10〜100 の間で 10刻みで指定してください（例: `30%`）。")
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "❌ 閾値は 10〜100 の間で 10刻みで指定してください（例: `30%%`）。")
 	}
 }
 
