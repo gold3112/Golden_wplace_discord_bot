@@ -66,39 +66,39 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
-				Name:        "create",
-				Description: "監視チャンネルを作成",
+				Name:        "init",
+				Description: "[管理者専用] このチャンネルを監視チャンネルとして初期化",
 				Options: []*discordgo.ApplicationCommandOption{
 					{Name: "label", Description: "監視の表示名", Type: discordgo.ApplicationCommandOptionString, Required: true},
 				},
 			},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "自分の監視ステータスを表示"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視を一時停止"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視を再開"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視を削除"},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視の一時停止"},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視の再開"},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視の削除"},
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "now", Description: "このチャンネルの監視を即時取得"},
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "settings",
-				Description: "監視設定を変更",
+				Description: "現在の設定確認と変更",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "origin", Description: "新しい座標 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
-					{Name: "template", Description: "新しい画像 (PNG/WebP/JPEG)", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
-					{Name: "threshold", Description: "通知閾値 (10-100, 10刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
-					{Name: "type", Description: "タイプ", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "progress (進捗追跡)", Value: "progress"},
-						{Name: "vandal (荒らし検知)", Value: "vandal"},
+					{Name: "origin", Description: "座標を変更 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
+					{Name: "template", Description: "テンプレート画像を変更", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
+					{Name: "threshold", Description: "通知閾値 (10%〜100%、10%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
+					{Name: "type", Description: "タイプを変更", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "Progress (進捗追跡)", Value: "progress"},
+						{Name: "Vandal (荒らし検知)", Value: "vandal"},
 					}},
-					{Name: "visibility", Description: "公開設定", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "public (公開)", Value: "public"},
-						{Name: "private (非公開)", Value: "private"},
+					{Name: "visibility", Description: "公開設定を変更", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "Public (全体公開)", Value: "public"},
+						{Name: "Private (自分のみ)", Value: "private"},
 					}},
 				},
 			},
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "mod_delete",
-				Description: "管理者が指定ユーザーの監視を削除",
+				Description: "[管理者専用] 指定ユーザーの監視を強制削除",
 				Options: []*discordgo.ApplicationCommandOption{
 					{Name: "user", Description: "対象ユーザー", Type: discordgo.ApplicationCommandOptionUser, Required: true},
 				},
@@ -144,8 +144,8 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 	case "watch":
 		sub := data.Options[0]
 		switch sub.Name {
-		case "create":
-			w.processCreateRequest(s, ic, watchCreateInput{Label: getOptionString(sub.Options, "label")})
+		case "init":
+			w.handleInitCommand(s, ic, sub.Options)
 		case "status":
 			w.handleStatus(s, ic)
 		case "pause":
@@ -218,6 +218,16 @@ func (w *WatchCommands) handleComponentInteraction(s *discordgo.Session, ic *dis
 		w.handleFixButton(s, ic, watchID, btnID)
 	case btnVisPublic, btnVisPrivate:
 		w.handleVisButton(s, ic, watchID, btnID)
+	case "edit_origin":
+		w.presentEditOriginModal(s, ic, watchID)
+	case "edit_threshold":
+		w.presentEditThresholdModal(s, ic, watchID)
+	case "edit_template":
+		respondEphemeral(s, ic, "🖼️ 新しいテンプレート画像をこのチャンネルにアップロードしてください。")
+	case "edit_type":
+		w.handleToggleType(s, ic, watchID)
+	case "edit_vis":
+		w.handleToggleVis(s, ic, watchID)
 	}
 }
 
@@ -231,12 +241,119 @@ func (w *WatchCommands) parseButtonID(customID string) (string, string) {
 }
 
 func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	if ic.ModalSubmitData().CustomID == watchModalID {
-		w.processCreateRequest(s, ic, watchCreateInput{Label: getModalValue(ic, "label")})
+	data := ic.ModalSubmitData()
+	if data.CustomID == watchModalID {
+		w.processCreateRequest(s, ic, watchCreateInput{Label: getModalValue(ic, "label")}, false)
+		return
+	}
+
+	btnID, watchID := w.parseButtonID(data.CustomID)
+	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
+	if wt == nil || wt.ID != watchID {
+		respondEphemeral(s, ic, "❌ セッションが切れました。再度コマンドを実行してください。")
+		return
+	}
+
+	switch btnID {
+	case "modal_edit_origin":
+		val := getModalValue(ic, "origin")
+		if _, err := utils.ParseOrigin(val); err != nil {
+			respondEphemeral(s, ic, "❌ 座標形式が不正です。")
+			return
+		}
+		wt.Origin = val
+		_ = w.storage.UpdateWatch(wt)
+		if wt.Status == models.WatchStatusActive {
+			w.manager.ScheduleWatch(wt)
+		}
+		respondEphemeral(s, ic, "✅ 座標を更新しました。")
+	case "modal_edit_threshold":
+		val, _ := strconv.Atoi(getModalValue(ic, "threshold"))
+		if val < 10 || val > 100 || val%10 != 0 {
+			respondEphemeral(s, ic, "❌ 閾値は10〜100の間で10刻みで指定してください。")
+			return
+		}
+		wt.ThresholdPercent = float64(val)
+		_ = w.storage.UpdateWatch(wt)
+		respondEphemeral(s, ic, fmt.Sprintf("✅ 閾値を %d%% に更新しました。", val))
 	}
 }
 
-func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo.InteractionCreate, input watchCreateInput) {
+func (w *WatchCommands) presentEditOriginModal(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: w.makeButtonID("modal_edit_origin", watchID),
+			Title:    "座標の変更",
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.TextInput{CustomID: "origin", Label: "新しい座標", Style: discordgo.TextInputShort, Required: true, Placeholder: "例: 1818-806-989-358"},
+				}},
+			},
+		},
+	})
+}
+
+func (w *WatchCommands) presentEditThresholdModal(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: w.makeButtonID("modal_edit_threshold", watchID),
+			Title:    "閾値の変更",
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.TextInput{CustomID: "threshold", Label: "新しい閾値 (10〜100)", Style: discordgo.TextInputShort, Required: true, Placeholder: "例: 30"},
+				}},
+			},
+		},
+	})
+}
+
+func (w *WatchCommands) handleToggleType(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
+	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
+	if wt == nil || wt.ID != watchID {
+		return
+	}
+	if wt.Type == models.WatchTypeProgress {
+		wt.Type = models.WatchTypeVandal
+	} else {
+		wt.Type = models.WatchTypeProgress
+	}
+	_ = w.storage.UpdateWatch(wt)
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("✅ 監視タイプを **%s** に変更しました。", wt.Type), Flags: discordgo.MessageFlagsEphemeral},
+	})
+}
+
+func (w *WatchCommands) handleToggleVis(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
+	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
+	if wt == nil || wt.ID != watchID {
+		return
+	}
+	if wt.Visibility == models.WatchVisibilityPublic {
+		wt.Visibility = models.WatchVisibilityPrivate
+		_ = s.ChannelPermissionDelete(wt.ChannelID, wt.GuildID)
+	} else {
+		wt.Visibility = models.WatchVisibilityPublic
+		_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, discordgo.PermissionSendMessages)
+	}
+	_ = w.storage.UpdateWatch(wt)
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Content: fmt.Sprintf("✅ 公開設定を **%s** に変更しました。", wt.Visibility), Flags: discordgo.MessageFlagsEphemeral},
+	})
+}
+
+func (w *WatchCommands) handleInitCommand(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	if !hasPermission(ic.Member, discordgo.PermissionManageChannels) {
+		respondEphemeral(s, ic, "このコマンドを実行するにはチャンネル管理権限が必要です。")
+		return
+	}
+	w.processCreateRequest(s, ic, watchCreateInput{Label: getOptionString(opts, "label")}, true)
+}
+
+func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo.InteractionCreate, input watchCreateInput, isExternal bool) {
 	user := interactionUser(ic)
 	label := strings.TrimSpace(input.Label)
 	if label == "" {
@@ -251,35 +368,43 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 	}
 
 	watchID := utils.GenerateWatchID(user.ID)
-	categoryID, _ := w.getOrCreateCategory(s, ic.GuildID)
-	channel, err := s.GuildChannelCreateComplex(ic.GuildID, discordgo.GuildChannelCreateData{
-		Name:     utils.SlugifyChannelName(label),
-		Type:     discordgo.ChannelTypeGuildText,
-		ParentID: categoryID,
-		PermissionOverwrites: []*discordgo.PermissionOverwrite{
-			{ID: ic.GuildID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
-			{ID: user.ID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
-		},
-	})
-	if err != nil {
-		respondEphemeral(s, ic, "チャンネルの作成に失敗しました。権限を確認してください。")
-		return
+	var channelID string
+
+	if isExternal {
+		channelID = ic.ChannelID
+	} else {
+		categoryID, _ := w.getOrCreateCategory(s, ic.GuildID)
+		channel, err := s.GuildChannelCreateComplex(ic.GuildID, discordgo.GuildChannelCreateData{
+			Name:     utils.SlugifyChannelName(label),
+			Type:     discordgo.ChannelTypeGuildText,
+			ParentID: categoryID,
+			PermissionOverwrites: []*discordgo.PermissionOverwrite{
+				{ID: ic.GuildID, Type: discordgo.PermissionOverwriteTypeRole, Deny: discordgo.PermissionViewChannel},
+				{ID: user.ID, Type: discordgo.PermissionOverwriteTypeMember, Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionReadMessageHistory | discordgo.PermissionAttachFiles},
+			},
+		})
+		if err != nil {
+			respondEphemeral(s, ic, "❌ チャンネル作成に失敗しました。")
+			return
+		}
+		channelID = channel.ID
 	}
 
 	watch := &models.Watch{
-		ID:               watchID,
-		Label:            label,
-		OwnerID:          user.ID,
-		GuildID:          ic.GuildID,
-		ChannelID:        channel.ID,
-		Status:           models.WatchStatusPending,
-		CreatedAt:        time.Now().UTC(),
-		ThresholdPercent: defaultThresholdPercent,
+		ID:                watchID,
+		Label:             label,
+		OwnerID:           user.ID,
+		GuildID:           ic.GuildID,
+		ChannelID:         channelID,
+		Status:            models.WatchStatusPending,
+		IsExternalChannel: isExternal,
+		CreatedAt:         time.Now().UTC(),
+		ThresholdPercent:  defaultThresholdPercent,
 	}
 	_ = w.storage.AddWatch(watch)
 
 	msg := &discordgo.MessageSend{
-		Content: fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: 監視タイプを選択してください。", user.Mention()),
+		Content: fmt.Sprintf("👋 %s さんの監視チャンネルとして初期化しました。\n\n**ステップ1**: 監視タイプを選択してください。", user.Mention()),
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{
 				Components: []discordgo.MessageComponent{
@@ -289,8 +414,12 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 			},
 		},
 	}
-	_, _ = s.ChannelMessageSendComplex(channel.ID, msg)
-	respondEphemeral(s, ic, fmt.Sprintf("作成しました <#%s>", channel.ID))
+	_, _ = s.ChannelMessageSendComplex(channelID, msg)
+	if isExternal {
+		respondEphemeral(s, ic, "このチャンネルを監視用に初期化しました。")
+	} else {
+		respondEphemeral(s, ic, fmt.Sprintf("作成しました <#%s>", channelID))
+	}
 }
 
 func (w *WatchCommands) getOrCreateCategory(s *discordgo.Session, guildID string) (string, error) {
@@ -579,6 +708,51 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		return
 	}
 
+	if len(opts) > 0 {
+		w.performDirectSettingsUpdate(s, ic, wt, opts)
+		return
+	}
+
+	emb := &discordgo.MessageEmbed{
+		Title:       "⚙️ 監視設定",
+		Description: fmt.Sprintf("対象: **%s**", wt.Label),
+		Color:       0x5865F2,
+		Fields: []*discordgo.MessageEmbedField{
+			{Name: "監視タイプ", Value: string(wt.Type), Inline: true},
+			{Name: "通知閾値", Value: fmt.Sprintf("%.0f%%", wt.ThresholdPercent), Inline: true},
+			{Name: "公開設定", Value: string(wt.Visibility), Inline: true},
+			{Name: "座標 (Origin)", Value: fmt.Sprintf("`%s`", wt.Origin), Inline: false},
+		},
+		Footer: &discordgo.MessageEmbedFooter{Text: "下のボタンから設定を個別に変更できます。"},
+	}
+
+	components := []discordgo.MessageComponent{
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{Label: "座標変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_origin", wt.ID)},
+				discordgo.Button{Label: "閾値変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_threshold", wt.ID)},
+				discordgo.Button{Label: "画像変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_template", wt.ID)},
+			},
+		},
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{Label: "タイプ切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_type", wt.ID)},
+				discordgo.Button{Label: "公開設定切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_vis", wt.ID)},
+			},
+		},
+	}
+
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Embeds:     []*discordgo.MessageEmbed{emb},
+			Components: components,
+			Flags:      discordgo.MessageFlagsEphemeral,
+		},
+	})
+}
+
+func (w *WatchCommands) performDirectSettingsUpdate(s *discordgo.Session, ic *discordgo.InteractionCreate, wt *models.Watch, opts []*discordgo.ApplicationCommandInteractionDataOption) {
 	updated := false
 	if origin := getOptionString(opts, "origin"); origin != "" {
 		if _, err := utils.ParseOrigin(origin); err == nil {
@@ -624,9 +798,9 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		if wt.Status == models.WatchStatusActive {
 			w.manager.ScheduleWatch(wt)
 		}
-		respondEphemeral(s, ic, "監視設定を更新しました。")
+		respondEphemeral(s, ic, "✅ 監視設定を更新しました。")
 	} else {
-		respondEphemeral(s, ic, "変更内容がありません。")
+		respondEphemeral(s, ic, "❌ 有効な変更内容がありませんでした。")
 	}
 }
 
@@ -688,7 +862,9 @@ func (w *WatchCommands) deleteWatchAndCleanup(s *discordgo.Session, watch *model
 	w.manager.RemoveWatch(watch.ID)
 	_ = w.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
 	_ = w.storage.RemoveWatchRecord(watch.GuildID, watch.ID)
-	_, _ = s.ChannelDelete(watch.ChannelID)
+	if !watch.IsExternalChannel {
+		_, _ = s.ChannelDelete(watch.ChannelID)
+	}
 	return nil
 }
 

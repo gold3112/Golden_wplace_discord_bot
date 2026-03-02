@@ -47,8 +47,9 @@ type Watch struct {
 	Template           string          `json:"template"`
 	ThresholdPixels    int         `json:"threshold_pixels"`
 	ThresholdPercent   float64     `json:"threshold_percent"`
-	Status             WatchStatus `json:"status"`
-	CreatedAt          time.Time   `json:"created_at"`
+	Status            WatchStatus     `json:"status"`
+	IsExternalChannel bool            `json:"is_external_channel"` // ボットが作成したチャンネルではない場合 true
+	CreatedAt         time.Time       `json:"created_at"`
 	LastCheckedAt      *time.Time  `json:"last_checked_at,omitempty"`
 	LastDiffPixels     int         `json:"last_diff_pixels"`
 	LastDiffPercentage float64     `json:"last_diff_percentage"`
