@@ -4,116 +4,70 @@
 
 ## 機能
 
-- **1ユーザー1監視**: 各ユーザーは1つの監視チャンネルを作成可能
+- **セルフサービス監視**: 管理者が `/watch init` で指定したチャンネルを監視専用チャンネルとして初期化
 - **監視タイプ**:
   - **Progress Monitor**: 作品の完成度追跡（差分減少 = 進捗）
-  - **Vandal Monitor**: 荒らし検知（差分増加 = アラート）
-- **5分間隔監視**: API負荷を分散
-- **自動通知**: 差分検知時にチャンネルへ通知
+  - **Vandal Monitor**: 荒らし検知（差分増加 = 警告）
+- **高精度な差分検知**: テンプレート画像のアルファマスク（透明度）を考慮し、特定エリアのみを厳密に比較
+- **パレット補正**: アップロードされた画像がWplace公式パレット外の色を含んでいる場合、自動的に近似色へ補正
+- **インタラクティブ設定**: `/watch settings` からボタン操作で座標や閾値、公開設定を簡単に変更可能
+- **自動クリーンアップ**: Discord側でチャンネルが削除されると、ボット内部の監視タスクや画像も自動的に削除
 
-## セットアップ
+## セットアップ手順
 
-### 環境変数
+1.  **監視用チャンネルの用意**:
+    新しいチャンネルを作成するか、既存のチャンネルへ移動します。
+2.  **初期化 (`/watch init`)**:
+    管理者が `/watch init label:作品名` を実行します。
+3.  **タイプの選択**:
+    ボタンで `Progress`（進捗）か `Vandal`（荒らし検知）を選択します。
+4.  **座標の登録**:
+    `1818-806-989-358` のような形式で座標をチャットに送信します。
+5.  **テンプレートのアップロード**:
+    監視の基準となる画像（PNG/WebP/JPEG）をアップロードします。
+6.  **公開設定の選択**:
+    ボタンで `Public`（全員閲覧可）か `Private`（自分のみ）を選択して開始！
 
-ローカル開発では `.env` を使っても構いませんが、本番・Docker 実行時は **リポジトリ外の secrets ディレクトリ** に env ファイルを置いてください。
-
-```
-F:\Dev\VSC\go\secrets\golden_wplace_bot.env
-└─ (このリポジトリ)
-```
-
-1. `cp .env.example ../secrets/golden_wplace_bot.env`
-2. `../secrets/golden_wplace_bot.env` を編集して `DISCORD_TOKEN` 等を設定
-
-環境変数 `WPLACE_API_BASE` を省略すると、自動で `https://backend.wplace.live` を利用します（推奨値）。
-ローカルで直接起動する場合は、ルートに `.env` を作成しても OK です。
-
-### 実行（ローカル）
-
-```bash
-go run ./cmd/bot
-```
-
-### 実行（Docker / docker compose）
-
-```bash
-# ../secrets/golden_wplace_bot.env を用意済みであること
-docker compose up --build -d
-```
-
-- `docker compose` は `docker-compose.yml` が置かれたディレクトリで実行してください
-- `./data` が `/app/data` にマウントされ、監視設定やテンプレート画像がコンテナ再起動後も保持されます（イメージ内では空ディレクトリを自動作成）
-
-### テンプレート画像と座標
-
-- `/watch create`（またはパネルのモーダル）では、監視名・タイプだけを入力します。チャンネルが自動作成されたら、Botの案内に従って **座標をメッセージで送信** → **テンプレート画像(PNG)を添付** してください。
-- Bot はアップロードされた画像を `data/guilds/{guild_id}/template_img/{watch_id}.png` に保存し、透過していないピクセルのみを比較に利用します。
-- 座標は `タイルX-タイルY-ピクセルX-ピクセルY` 形式 (例: `1818-806-989-358`) で入力してください。
-- 通知しきい値はデフォルトで **10%**（Koukyo botと同等）です。必要に応じてチャンネルで `threshold 30` のように送信するか、`/watch settings threshold <percent>` で 10% 刻みの値に変更できます。
-- `/watch delete` や `/watch mod_delete` を実行すると監視ジョブを停止し、テンプレート画像および専用チャンネルをまとめて削除します。
-
-## コマンド
+## コマンド一覧
 
 ### ユーザーコマンド
-- `/watch create` - 新規監視チャンネル作成（セットアップ開始）
 - `/watch status` - 自分の監視状態確認
 - `/watch pause` - 監視一時停止
 - `/watch resume` - 監視再開
-- `/watch delete` - 監視チャンネル削除（テンプレ画像・チャンネルごと撤去）
-- `/watch now` - 監視専用チャンネル内で即時チェックを実行し、最新の差分プレビューを取得
-- `/w now` - `/watch now` の短縮スラッシュコマンド
-- `/watch settings threshold <percent>` - 通知しきい値を10%刻みで変更
+- `/watch delete` - 監視の終了（設定とテンプレート画像を削除。ボット作成チャンネル以外はチャンネル自体は残ります）
+- `/watch now` - 現在の監視状況を即時チェックしプレビューを表示
+- `/w now` - `/watch now` の短縮コマンド
+- `/watch settings` - 現在の設定を表示し、ボタン操作で個別に変更（座標、閾値、画像、タイプ、公開設定）
 
 ### 管理者コマンド
-- `/watch mod_delete user:<@target>` - Manage Channels 権限を持つモデレーターが任意の監視を強制削除（チャンネル/テンプレート含む）
+- `/watch init label:<name>` - このチャンネルを監視チャンネルとして初期化
+- `/createmonitor` - ユーザーが自分で初期化リクエストを送るためのパネルを設置
+- `/watch mod_delete user:<@target>` - 指定したユーザーの監視を強制削除
 
-### テキストショートカット（Message Content Intent が必要）
+### テキストショートカット
 - `w! now` - 監視チャンネル内から即時チェックを実行
-- `w!{label名}` - どのチャンネルからでも指定ラベルの監視結果を取得し、結果を投稿チャンネルに表示
+- `w!{label名}` - どのチャンネルからでも指定したラベルの監視結果を取得
+- `threshold {値}` または `{値}%` - 監視チャンネル内で通知閾値を変更（10%〜100%、10%刻み）
 
-## アーキテクチャ
+## 技術仕様・制限
 
+- **1ユーザー1監視**: 1つのサーバーにつき、1ユーザー1つまで監視を持てます。
+- **監視間隔**: 5分固定。
+- **タイル制限**: 1つの監視エリアがカバーできるWplaceタイルは最大8枚までです。
+- **画像サイズ**: 最大10MP（1000万ピクセル）まで。ファイルサイズは8MBまで。
+- **アトミック保存**: 設定ファイルはアトミック書き込みにより破損を防止しています。
+- **整合性チェック**: ボット起動時にDiscordチャンネルの存在を確認し、削除済みのチャンネルに紐づくデータは自動消去されます。
+
+## 開発・実行
+
+### 環境変数
+`secrets/golden_wplace_bot.env` に以下を設定してください：
+- `DISCORD_TOKEN`: ボットのトークン
+- `WPLACE_API_BASE`: Wplace APIのベースURL
+- `WATCH_CATEGORY_NAME`: チャンネルを自動作成する場合の親カテゴリ名（任意）
+
+### 実行
+```bash
+go build -o bot.exe ./cmd/bot
+./bot.exe
 ```
-cmd/bot/main.go              エントリーポイント
-internal/
-  ├── watchmanager/          監視エンジン
-  ├── setup/                 セットアップウィザード
-  ├── notifications/         通知システム
-  ├── storage/              データ永続化
-  ├── commands/             コマンド実装
-  ├── embeds/               Embed生成
-  ├── wplace/               Wplace API
-  ├── utils/                ユーティリティ
-  ├── config/               設定管理
-  └── models/               データモデル
-```
-
-## データ構造
-
-```
-data/guilds/{guild_id}/
-  ├── watches.json           監視設定
-  ├── template_img/          テンプレート画像
-  └── snapshots/             差分スナップショット
-```
-
-## 必要な Discord 権限
-
-Bot をサーバーへ追加する際は、以下の Privileged Intents / 権限を付与してください。
-
-- **Gateway Intents**
-  - Guilds (サーバー情報取得)
-  - Guild Messages (チャンネル・メッセージ検知)
-  - Message Content (監視チャンネルでのテンプレ確認などに使用)
-- **Bot Permissions**（ロールに付与）
-  - Manage Channels: Ticket風監視チャンネルの作成・削除
-  - Read Messages / View Channels
-  - Send Messages
-  - Embed Links / Attach Files（通知に画像を添付する場合）
-  - Manage Messages（任意: ボタンや案内メッセージの後片付けなどを想定）
-
-## 制限事項
-
-- 1ユーザーあたり1監視まで
-- 監視間隔は5分固定
-- テンプレート画像は5MBまで
