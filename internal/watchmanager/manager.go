@@ -12,6 +12,8 @@ import (
 	"golden_wplace_discord_bot/internal/storage"
 	"golden_wplace_discord_bot/internal/utils"
 	"golden_wplace_discord_bot/internal/wplace"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 func init() {
@@ -68,7 +70,7 @@ func (m *Manager) getWatchMutex(id string) *sync.Mutex {
 }
 
 // StartExisting 保存済みの監視を起動
-func (m *Manager) StartExisting() error {
+func (m *Manager) StartExisting(s *discordgo.Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -89,6 +91,15 @@ func (m *Manager) StartExisting() error {
 			continue
 		}
 		for _, watch := range watches {
+			// チャンネルの存在確認
+			_, err := s.Channel(watch.ChannelID)
+			if err != nil {
+				// チャンネルが見つからない（削除された）場合
+				log.Printf("Channel %s for watch %s not found. Cleaning up...", watch.ChannelID, watch.ID)
+				_ = m.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
+				_ = m.storage.RemoveWatchRecord(watch.GuildID, watch.ID)
+				continue
+			}
 			m.scheduleLocked(watch)
 		}
 	}
@@ -293,18 +304,15 @@ func (m *Manager) dispatchNotifications(watch *models.Watch, result *wplace.Resu
 
 	sent := 0
 
-	// 初回実行時、または大きな差分がある場合の特別処理
-	if watch.TotalNotifications == 0 && currentTier > notifications.TierNone {
-		if err := m.notifier.NotifyIncrease(watch, result, currentTier); err != nil {
-			log.Printf("initial notify increase failed for %s: %v", watch.ID, err)
-		} else {
-			sent++
-		}
-		// 初回通知済みとしてマークするために状態を更新して戻る
+	// 初回実行時（通知履歴がない場合）
+	if watch.TotalNotifications == 0 {
+		// 初回の状態を「通知済み」として記録し、アラートは送らない
 		m.mu.Lock()
 		m.notifyStates[watch.ID] = &notificationState{LastTier: currentTier, WasZero: isZero}
 		m.mu.Unlock()
-		return sent
+		// finalizeWatchResult で TotalNotifications がインクリメントされるため、
+		// ここでは 0 を返して「通知は送っていないが状態は更新した」ことにする
+		return 0
 	}
 
 	if wasZero && !isZero {

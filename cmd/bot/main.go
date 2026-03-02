@@ -53,10 +53,10 @@ func main() {
 	if err := watchCommands.Register(dg, appID); err != nil {
 		log.Printf("failed to register commands: %v", err)
 	}
-
-	if err := manager.StartExisting(); err != nil {
-		log.Printf("failed to start existing watches: %v", err)
-	}
+// 既存の監視を開始
+if err := manager.StartExisting(dg); err != nil {
+	log.Printf("failed to start existing watches: %v", err)
+}
 
 	// 既存チャンネルのカテゴリ整理
 	if err := watchCommands.ReorganizeChannels(dg); err != nil {
