@@ -583,8 +583,8 @@ func (w *WatchCommands) ReorganizeChannels(s *discordgo.Session) error {
 }
 
 func (w *WatchCommands) handleTypeButton(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID, btnID string) {
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt == nil || wt.ID != watchID {
+	wt := w.getTargetWatch(ic, watchID)
+	if wt == nil {
 		return
 	}
 	if btnID == btnTypeProgress {
@@ -768,8 +768,8 @@ func (w *WatchCommands) handleVisButton(s *discordgo.Session, ic *discordgo.Inte
 	if btnID == btnVisPublic {
 		vis = models.WatchVisibilityPublic
 	}
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt == nil || wt.ID != watchID {
+	wt := w.getTargetWatch(ic, watchID)
+	if wt == nil {
 		return
 	}
 	wt.Visibility = vis
@@ -1175,9 +1175,9 @@ func (w *WatchCommands) handleCreateMonitorCommand(s *discordgo.Session, ic *dis
 }
 
 func (w *WatchCommands) presentCreateModal(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	existing, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if existing != nil && existing.Status != models.WatchStatusDeleted {
-		respondEphemeral(s, ic, "既に監視チャンネルが存在します。")
+	count, _ := w.storage.CountUserWatches(ic.GuildID, interactionUser(ic).ID)
+	if count >= models.MaxUserWatches {
+		respondEphemeral(s, ic, fmt.Sprintf("既に監視上限（%d個）に達しています。新しい監視を始めるには既存のものを削除してください。", models.MaxUserWatches))
 		return
 	}
 
