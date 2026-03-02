@@ -251,9 +251,9 @@ func (w *WatchCommands) handleModalSubmit(s *discordgo.Session, ic *discordgo.In
 	}
 
 	btnID, watchID := w.parseButtonID(data.CustomID)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt == nil || wt.ID != watchID {
-		respondEphemeral(s, ic, "❌ セッションが切れました。再度コマンドを実行してください。")
+	wt := w.getTargetWatch(ic, watchID)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 操作権限がないか、監視が見つかりません。")
 		return
 	}
 
@@ -313,8 +313,9 @@ func (w *WatchCommands) presentEditThresholdModal(s *discordgo.Session, ic *disc
 }
 
 func (w *WatchCommands) handleToggleType(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt == nil || wt.ID != watchID {
+	wt := w.getTargetWatch(ic, watchID)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 操作権限がないか、監視が見つかりません。")
 		return
 	}
 	if wt.Type == models.WatchTypeProgress {
@@ -330,8 +331,13 @@ func (w *WatchCommands) handleToggleType(s *discordgo.Session, ic *discordgo.Int
 }
 
 func (w *WatchCommands) handleToggleVis(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID string) {
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt == nil || wt.ID != watchID {
+	wt := w.getTargetWatch(ic, watchID)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 操作権限がないか、監視が見つかりません。")
+		return
+	}
+	if wt.IsExternalChannel {
+		respondEphemeral(s, ic, "❌ 既存チャンネルの監視では公開設定を変更できません。")
 		return
 	}
 	if wt.Visibility == models.WatchVisibilityPublic {
@@ -783,7 +789,19 @@ func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.Interac
 
 func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
 	u := interactionUser(ic)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, u.ID)
+	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
+	
+	var wt *models.Watch
+	// 管理者の場合は、まず現在のチャンネルに紐付く監視を探す
+	if isAdmin {
+		wt, _ = w.storage.GetWatchByChannel(ic.GuildID, ic.ChannelID)
+	}
+	
+	// 見つからない、または一般ユーザーの場合は自分の監視を探す
+	if wt == nil {
+		wt, _ = w.storage.GetUserWatch(ic.GuildID, u.ID)
+	}
+
 	if wt == nil {
 		respondEphemeral(s, ic, "設定可能な監視が見つかりません。")
 		return
@@ -794,43 +812,68 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		return
 	}
 
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "監視タイプ", Value: string(wt.Type), Inline: true},
+		{Name: "通知閾値", Value: fmt.Sprintf("%.0f%%", wt.ThresholdPercent), Inline: true},
+	}
+	// 外部チャンネル（init）ではない場合のみ公開設定を表示
+	if !wt.IsExternalChannel {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "公開設定", Value: string(wt.Visibility), Inline: true})
+	}
+	fields = append(fields, &discordgo.MessageEmbedField{Name: "座標 (Origin)", Value: fmt.Sprintf("`%s`", wt.Origin), Inline: false})
+
 	emb := &discordgo.MessageEmbed{
 		Title:       "⚙️ 監視設定",
-		Description: fmt.Sprintf("対象: **%s**", wt.Label),
+		Description: fmt.Sprintf("対象: **%s**\n所有者: <@%s>", wt.Label, wt.OwnerID),
 		Color:       0x5865F2,
-		Fields: []*discordgo.MessageEmbedField{
-			{Name: "監視タイプ", Value: string(wt.Type), Inline: true},
-			{Name: "通知閾値", Value: fmt.Sprintf("%.0f%%", wt.ThresholdPercent), Inline: true},
-			{Name: "公開設定", Value: string(wt.Visibility), Inline: true},
-			{Name: "座標 (Origin)", Value: fmt.Sprintf("`%s`", wt.Origin), Inline: false},
-		},
-		Footer: &discordgo.MessageEmbedFooter{Text: "下のボタンから設定を個別に変更できます。"},
+		Fields:      fields,
+		Footer:      &discordgo.MessageEmbedFooter{Text: "下のボタンから設定を個別に変更できます。"},
 	}
 
-	components := []discordgo.MessageComponent{
-		discordgo.ActionsRow{
-			Components: []discordgo.MessageComponent{
-				discordgo.Button{Label: "座標変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_origin", wt.ID)},
-				discordgo.Button{Label: "閾値変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_threshold", wt.ID)},
-				discordgo.Button{Label: "画像変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_template", wt.ID)},
-			},
+	row1 := discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "座標変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_origin", wt.ID)},
+			discordgo.Button{Label: "閾値変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_threshold", wt.ID)},
+			discordgo.Button{Label: "画像変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_template", wt.ID)},
 		},
-		discordgo.ActionsRow{
-			Components: []discordgo.MessageComponent{
-				discordgo.Button{Label: "タイプ切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_type", wt.ID)},
-				discordgo.Button{Label: "公開設定切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_vis", wt.ID)},
-			},
+	}
+
+	row2 := discordgo.ActionsRow{
+		Components: []discordgo.MessageComponent{
+			discordgo.Button{Label: "タイプ切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_type", wt.ID)},
 		},
+	}
+	// 外部チャンネルではない場合のみ公開設定切替ボタンを追加
+	if !wt.IsExternalChannel {
+		row2.Components = append(row2.Components, discordgo.Button{Label: "公開設定切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_vis", wt.ID)})
 	}
 
 	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
 			Embeds:     []*discordgo.MessageEmbed{emb},
-			Components: components,
+			Components: []discordgo.MessageComponent{row1, row2},
 			Flags:      discordgo.MessageFlagsEphemeral,
 		},
 	})
+}
+
+// getTargetWatch ターゲットの監視を取得する共通ヘルパー
+func (w *WatchCommands) getTargetWatch(ic *discordgo.InteractionCreate, watchID string) *models.Watch {
+	u := interactionUser(ic)
+	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
+
+	// IDが一致するものを全読み込みから探す（確実な方法）
+	data, _ := w.storage.LoadGuildWatches(ic.GuildID)
+	for _, wt := range data.Watches {
+		if wt.ID == watchID {
+			// 所有者本人か、管理者であれば許可
+			if wt.OwnerID == u.ID || isAdmin {
+				return wt
+			}
+		}
+	}
+	return nil
 }
 
 func (w *WatchCommands) performDirectSettingsUpdate(s *discordgo.Session, ic *discordgo.InteractionCreate, wt *models.Watch, opts []*discordgo.ApplicationCommandInteractionDataOption) {
