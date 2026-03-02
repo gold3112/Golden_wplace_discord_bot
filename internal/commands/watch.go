@@ -505,6 +505,8 @@ func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.Me
 
 	if watch.Template == "" {
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。次にテンプレート画像をアップロードしてください。")
+	} else if watch.IsExternalChannel {
+		w.finalizeSetup(s, mc.ChannelID, watch)
 	} else {
 		w.promptVisibility(s, mc.ChannelID, watch.ID)
 	}
@@ -574,7 +576,12 @@ func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.
 	watch.Template = filename
 	watch.PaletteFixSet = true
 	_ = w.storage.UpdateWatch(watch)
-	w.promptVisibility(s, mc.ChannelID, watch.ID)
+
+	if watch.IsExternalChannel {
+		w.finalizeSetup(s, mc.ChannelID, watch)
+	} else {
+		w.promptVisibility(s, mc.ChannelID, watch.ID)
+	}
 }
 
 func (w *WatchCommands) handleFixButton(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID, btnID string) {
@@ -600,7 +607,26 @@ func (w *WatchCommands) handleFixButton(s *discordgo.Session, ic *discordgo.Inte
 	delete(setupCache.fixedImages, watchID)
 	setupCache.Unlock()
 	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseUpdateMessage, Data: &discordgo.InteractionResponseData{Content: "✅ 補正を適用しました。", Components: []discordgo.MessageComponent{}}})
-	w.promptVisibility(s, ic.ChannelID, watchID)
+
+	if wt != nil {
+		if wt.IsExternalChannel {
+			w.finalizeSetup(s, ic.ChannelID, wt)
+		} else {
+			w.promptVisibility(s, ic.ChannelID, watchID)
+		}
+	}
+}
+
+func (w *WatchCommands) finalizeSetup(s *discordgo.Session, channelID string, wt *models.Watch) {
+	wt.Status = models.WatchStatusActive
+	wt.NextScheduledCheck = time.Now().Add(1 * time.Minute)
+	if wt.Visibility == "" {
+		wt.Visibility = models.WatchVisibilityPrivate // 内部的なデフォルト値
+	}
+	_ = w.storage.UpdateWatch(wt)
+	_, _ = s.ChannelMessageSend(channelID, "✅ セットアップが完了しました！現在の権限設定を維持したまま監視を開始します。")
+	w.manager.ScheduleWatch(wt)
+	go w.sendWatchNowMessage(s, wt.ChannelID, wt, "", false)
 }
 
 func (w *WatchCommands) handleVisButton(s *discordgo.Session, ic *discordgo.InteractionCreate, watchID, btnID string) {
