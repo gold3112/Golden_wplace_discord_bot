@@ -125,9 +125,9 @@ func HasNonPaletteColors(img *image.NRGBA) (bool, *image.NRGBA) {
 			nearest := GetNearestPaletteColor(c)
 			dist := colorDistance(c.R, c.G, c.B, nearest.R, nearest.G, nearest.B)
 
-			// 距離が 0 (完全一致) なら OK
-			// 距離が非常に小さい (例: 二乗和が 10 未満) なら、圧縮等の誤差とみなして OK とする
-			if dist < 10 {
+			// 距離が一定以下なら、圧縮等の誤差とみなして OK とする
+			// 100 は各成分が 5〜10 程度ズレていても許容する範囲
+			if dist < 100 {
 				out.SetNRGBA(x, y, nearest) // 誤差を修正してセット
 			} else {
 				hasInvalid = true

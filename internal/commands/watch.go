@@ -799,9 +799,10 @@ func (w *WatchCommands) promptVisibility(s *discordgo.Session, cID, wID string) 
 }
 
 func (w *WatchCommands) downloadAttachment(a *discordgo.MessageAttachment) ([]byte, error) {
-	u := a.ProxyURL
+	// オリジナルURLを優先（ProxyURLはDiscordによるリサイズや変換がかかっている可能性があるため）
+	u := a.URL
 	if u == "" {
-		u = a.URL
+		u = a.ProxyURL
 	}
 	r, err := templateHTTPClient.Get(u)
 	if err != nil {
