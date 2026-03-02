@@ -88,6 +88,10 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 						{Name: "progress (進捗追跡)", Value: string(models.WatchTypeProgress)},
 						{Name: "vandal (荒らし検知)", Value: string(models.WatchTypeVandal)},
 					}},
+					{Name: "palette_fix", Description: "パレット補正モード", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+						{Name: "auto (自動修正 - 推奨)", Value: "auto"},
+						{Name: "exact (そのまま)", Value: "exact"},
+					}},
 					{Name: "visibility", Description: "公開設定 (public / private)", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
 						{Name: "public (公開)", Value: "public"},
 						{Name: "private (非公開)", Value: "private"},
@@ -219,6 +223,12 @@ func (w *WatchCommands) HandleMessageCreate(s *discordgo.Session, mc *discordgo.
 	}
 	if watch.Template == "" {
 		w.handleTemplateInput(s, mc, watch)
+		return
+	}
+	// PaletteFixの判定が必要な場合 (内部的にデフォルトfalseなので、入力があったかどうかのフラグが必要かもしれないが、
+	// ここではセットアップのステップとしてVisibilityの前に入れる)
+	if !watch.PaletteFixSet { // 新しい内部フラグが必要
+		w.handlePaletteFixInput(s, mc, watch)
 		return
 	}
 	if watch.Visibility == "" {
@@ -434,7 +444,7 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 		typeLabel = "🚨 Vandal (荒らし検知)"
 	}
 
-	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\nタイプ: **%s**\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG/WebP/JPEG)をアップロードしてください。\n**ステップ3**: 最後に、チャンネルを全体公開(Public)にするか、非公開(Private)のままにするかを選んでください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention(), typeLabel)
+	intro := fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\nタイプ: **%s**\n\n**ステップ1**: このチャンネルで `1234-567-890-123` のようなフォーマットで座標を送信してください。\n**ステップ2**: 座標が登録されたら、テンプレート画像(PNG/WebP/JPEG)をアップロードしてください。\n**ステップ3**: パレット補正モード（自動修正 / そのまま）を選択してください。\n**ステップ4**: 最後に、チャンネルを全体公開(Public)にするか、非公開(Private)のままにするかを選んでください。\n\nすべて完了すると監視が自動的に開始されます。", user.Mention(), typeLabel)
 	_, _ = s.ChannelMessageSend(channel.ID, intro)
 
 	respondEphemeral(s, ic, fmt.Sprintf("監視チャンネル <#%s> を作成しました。", channel.ID))
@@ -544,8 +554,10 @@ func (w *WatchCommands) handleOriginInput(s *discordgo.Session, mc *discordgo.Me
 
 	if watch.Template == "" {
 		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。次にテンプレート画像(PNG/WebP/JPEG)をアップロードしてください。")
+	} else if !watch.PaletteFixSet {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。\n\n**ステップ3**: パレット補正モードを選択してください。`Auto` (または `a`)、`Exact` (または `e`) と入力してください。")
 	} else if watch.Visibility == "" {
-		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。\n\n**ステップ3**: 公開設定を選択してください。`Public` (または `o`)、`Private` (または `p`) と入力してください。")
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ 座標を登録しました。\n\n**ステップ4**: 公開設定を選択してください。`Public` (または `o`)、`Private` (または `p`) と入力してください。")
 	}
 }
 
@@ -581,7 +593,37 @@ func (w *WatchCommands) handleTemplateInput(s *discordgo.Session, mc *discordgo.
 		return
 	}
 
-	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレートを登録しました。\n\n**ステップ3**: 公開設定を選択してください。\nこのチャンネルをサーバー全員に閲覧可能(Public)にする場合は `Public` (または `o`)、自分のみのまま(Private)にする場合は `Private` (または `p`) と入力してください。")
+	_, _ = s.ChannelMessageSend(mc.ChannelID, "✅ テンプレートを登録しました。\n\n**ステップ3**: パレット補正モードを選択してください。\nテンプレートの色をWplaceの公式パレットに自動で合わせる（推奨）場合は `Auto` (または `a`)、画像の色をそのまま使う場合は `Exact` (または `e`) と入力してください。")
+}
+
+func (w *WatchCommands) handlePaletteFixInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
+	text := strings.ToLower(strings.TrimSpace(mc.Content))
+	var fix bool
+
+	if text == "auto" || text == "a" || text == "automatic" {
+		fix = true
+	} else if text == "exact" || text == "e" {
+		fix = false
+	} else {
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ `Auto` または `Exact` (または `a`/`e`) で入力してください。")
+		return
+	}
+
+	watch.PaletteFix = fix
+	watch.PaletteFixSet = true
+
+	if err := w.storage.UpdateWatch(watch); err != nil {
+		log.Printf("failed to update watch palette fix: %v", err)
+		_, _ = s.ChannelMessageSend(mc.ChannelID, "⚠️ 設定の保存中にエラーが発生しました。")
+		return
+	}
+
+	fixLabel := "🚫 Exact (そのまま)"
+	if fix {
+		fixLabel = "🎨 Auto (パレット補正あり)"
+	}
+
+	_, _ = s.ChannelMessageSend(mc.ChannelID, fmt.Sprintf("✅ パレット補正モードを設定しました: %s\n\n**ステップ4**: 最後に公開設定を選択してください。\n`Public` (または `o`)、`Private` (または `p`) と入力してください。", fixLabel))
 }
 
 func (w *WatchCommands) handleVisibilityInput(s *discordgo.Session, mc *discordgo.MessageCreate, watch *models.Watch) {
@@ -799,6 +841,7 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 
 	newOrigin := getOptionString(options, "origin")
 	newType := getOptionString(options, "type")
+	newPaletteFix := getOptionString(options, "palette_fix")
 	newVisibility := getOptionString(options, "visibility")
 	newTemplateID := getOptionAttachmentID(options, "template")
 	var newTemplate *discordgo.MessageAttachment
@@ -809,8 +852,8 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		}
 	}
 
-	if newOrigin == "" && newTemplate == nil && newVisibility == "" && newType == "" {
-		respondEphemeral(s, ic, "変更する設定（座標、テンプレート、タイプ、または公開設定）を指定してください。")
+	if newOrigin == "" && newTemplate == nil && newVisibility == "" && newType == "" && newPaletteFix == "" {
+		respondEphemeral(s, ic, "変更する設定（座標、テンプレート、タイプ、パレット補正、または公開設定）を指定してください。")
 		return
 	}
 
@@ -867,6 +910,11 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	if newType != "" {
 		watch.Type = models.WatchType(newType)
 		updatedFields = append(updatedFields, "タイプ")
+	}
+	if newPaletteFix != "" {
+		watch.PaletteFix = newPaletteFix == "auto"
+		watch.PaletteFixSet = true
+		updatedFields = append(updatedFields, "パレット補正")
 	}
 	if newVisibility != "" {
 		vis := models.WatchVisibility(newVisibility)

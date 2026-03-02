@@ -41,7 +41,9 @@ type Watch struct {
 	ChannelID          string          `json:"channel_id"`
 	Type               WatchType       `json:"type"`
 	Visibility         WatchVisibility `json:"visibility"` // 公開・非公開
-	Origin             string          `json:"origin"`     // "1818-806-989-358" format
+	PaletteFix         bool            `json:"palette_fix"` // パレット補正
+	PaletteFixSet      bool            `json:"palette_fix_set"` // パレット補正設定済みフラグ
+	Origin             string          `json:"origin"`      // "1818-806-989-358" format
 	Template           string          `json:"template"`
 	ThresholdPixels    int         `json:"threshold_pixels"`
 	ThresholdPercent   float64     `json:"threshold_percent"`

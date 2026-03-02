@@ -32,7 +32,7 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 		return nil, err
 	}
 	templatePath := m.storage.GetTemplateImagePath(watch.GuildID, watch.Template)
-	templateImg, opaqueCount, err := loadTemplateNRGBA(templatePath)
+	templateImg, opaqueCount, err := loadTemplateNRGBA(templatePath, watch.PaletteFix)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (m *Manager) evaluateWatch(watch *models.Watch) (*wplace.Result, error) {
 	}, nil
 }
 
-func loadTemplateNRGBA(path string) (*image.NRGBA, int, error) {
+func loadTemplateNRGBA(path string, paletteFix bool) (*image.NRGBA, int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("template not found: %s", path)
@@ -122,6 +122,19 @@ func loadTemplateNRGBA(path string) (*image.NRGBA, int, error) {
 		return nil, 0, fmt.Errorf("failed to decode template: %w", err)
 	}
 	nrgba := toNRGBA(img)
+
+	if paletteFix {
+		// パレット補正を適用
+		bounds := nrgba.Bounds()
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				originalColor := nrgba.At(x, y)
+				fixedColor := wplace.GetNearestPaletteColor(originalColor)
+				nrgba.Set(x, y, fixedColor)
+			}
+		}
+	}
+
 	return nrgba, countOpaque(nrgba), nil
 }
 
