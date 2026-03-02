@@ -72,17 +72,57 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 					{Name: "label", Description: "監視の表示名", Type: discordgo.ApplicationCommandOptionString, Required: true},
 				},
 			},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: "自分の監視ステータスを表示"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: "監視中の一覧を表示（管理者は全表示）"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "pause", Description: "監視の一時停止"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: "監視の再開"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delete", Description: "監視の削除"},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "now", Description: "このチャンネルの監視を即時取得"},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "status",
+				Description: "監視ステータスを表示",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "list",
+				Description: "監視中の一覧を表示（管理者は全表示）",
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "pause",
+				Description: "監視の一時停止",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "resume",
+				Description: "監視の再開",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "delete",
+				Description: "監視の削除",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "now",
+				Description: "指定または現在の監視を即時取得",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+				},
+			},
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "settings",
 				Description: "現在の設定確認と変更",
 				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
 					{Name: "origin", Description: "座標を変更 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
 					{Name: "template", Description: "テンプレート画像を変更", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
 					{Name: "threshold", Description: "通知閾値 (10%〜100%、10%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
@@ -132,11 +172,80 @@ func (w *WatchCommands) HandleInteraction(s *discordgo.Session, ic *discordgo.In
 	switch ic.Type {
 	case discordgo.InteractionApplicationCommand:
 		w.handleApplicationCommand(s, ic)
+	case discordgo.InteractionApplicationCommandAutocomplete:
+		w.handleAutocomplete(s, ic)
 	case discordgo.InteractionMessageComponent:
 		w.handleComponentInteraction(s, ic)
 	case discordgo.InteractionModalSubmit:
 		w.handleModalSubmit(s, ic)
 	}
+}
+
+func (w *WatchCommands) handleAutocomplete(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	data := ic.ApplicationCommandData()
+	var label string
+	if len(data.Options) > 0 {
+		for _, opt := range data.Options[0].Options {
+			if opt.Name == "label" {
+				label = opt.StringValue()
+				break
+			}
+		}
+	}
+
+	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
+	uID := interactionUser(ic).ID
+	
+	watches, _ := w.storage.LoadGuildWatches(ic.GuildID)
+	choices := []*discordgo.ApplicationCommandOptionChoice{}
+
+	for _, wt := range watches.Watches {
+		if wt.Status == models.WatchStatusDeleted { continue }
+		
+		// 一般ユーザーは自分のものだけ、管理者は全て
+		if !isAdmin && wt.OwnerID != uID { continue }
+
+		if label == "" || strings.Contains(strings.ToLower(wt.Label), strings.ToLower(label)) {
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  wt.Label,
+				Value: wt.Label,
+			})
+		}
+		if len(choices) >= 25 { break }
+	}
+
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: choices},
+	})
+}
+
+func (w *WatchCommands) resolveTargetWatch(ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) *models.Watch {
+	label := getOptionString(opts, "label")
+	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
+	uID := interactionUser(ic).ID
+
+	// 1. ラベル指定がある場合
+	if label != "" {
+		wt, _ := w.storage.GetWatchByLabel(ic.GuildID, label)
+		if wt != nil {
+			// 管理者ならOK、一般ユーザーは自分のものだけ
+			if isAdmin || wt.OwnerID == uID {
+				return wt
+			}
+		}
+		return nil
+	}
+
+	// 2. ラベル指定がない場合は現在のチャンネルに紐付く監視を探す
+	wt, _ := w.storage.GetWatchByChannel(ic.GuildID, ic.ChannelID)
+	if wt != nil {
+		if isAdmin || wt.OwnerID == uID {
+			return wt
+		}
+	}
+
+	return nil
 }
 
 func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *discordgo.InteractionCreate) {
@@ -148,17 +257,17 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 		case "init":
 			w.handleInitCommand(s, ic, sub.Options)
 		case "status":
-			w.handleStatus(s, ic)
+			w.handleStatus(s, ic, sub.Options)
 		case "list":
 			w.handleList(s, ic)
 		case "pause":
-			w.handlePause(s, ic)
+			w.handlePause(s, ic, sub.Options)
 		case "resume":
-			w.handleResume(s, ic)
+			w.handleResume(s, ic, sub.Options)
 		case "delete":
-			w.handleDelete(s, ic)
+			w.handleDelete(s, ic, sub.Options)
 		case "now":
-			w.handleNowSlash(s, ic)
+			w.handleNowSlash(s, ic, sub.Options)
 		case "settings":
 			w.handleSettings(s, ic, sub.Options)
 		case "mod_delete":
@@ -169,7 +278,7 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 	case "w":
 		sub := data.Options[0]
 		if sub.Name == "now" {
-			w.handleNowSlash(s, ic)
+			w.handleNowSlash(s, ic, sub.Options)
 		}
 	}
 }
@@ -749,41 +858,46 @@ func (w *WatchCommands) handleList(s *discordgo.Session, ic *discordgo.Interacti
 	})
 }
 
-func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	u := interactionUser(ic)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, u.ID)
+func (w *WatchCommands) handleStatus(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	wt := w.resolveTargetWatch(ic, opts)
 	if wt == nil {
-		respondEphemeral(s, ic, "稼働中の監視はありません。`/watch create` で作成してください。")
+		respondEphemeral(s, ic, "❌ 監視が見つからないか、操作権限がありません。ラベルを指定するか、監視チャンネルで実行してください。")
 		return
 	}
-	status := fmt.Sprintf("🎨 **%s**\n状態: `%s`\nタイプ: `%s`\n公開設定: `%s`\n閾値: `%.0f%%`\n座標: `%s`\n最終チェック: `%s`",
-		wt.Label, wt.Status, wt.Type, wt.Visibility, wt.ThresholdPercent, wt.Origin, formatTime(wt.LastCheckedAt))
+	status := fmt.Sprintf("🎨 **%s**\n状態: `%s`\nタイプ: `%s`\n公開設定: `%s`\n閾値: `%.0f%%`\n座標: `%s`\n最終チェック: `%s`\n所有者: <@%s>",
+		wt.Label, wt.Status, wt.Type, wt.Visibility, wt.ThresholdPercent, wt.Origin, formatTime(wt.LastCheckedAt), wt.OwnerID)
 	respondEphemeral(s, ic, status)
 }
 
-func (w *WatchCommands) handlePause(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	u := interactionUser(ic)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, u.ID)
-	if wt != nil && wt.Status == models.WatchStatusActive {
+func (w *WatchCommands) handlePause(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	wt := w.resolveTargetWatch(ic, opts)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
+		return
+	}
+	if wt.Status == models.WatchStatusActive {
 		wt.Status = models.WatchStatusPaused
 		_ = w.storage.UpdateWatch(wt)
 		w.manager.PauseWatch(wt)
-		respondEphemeral(s, ic, "監視を一時停止しました。")
+		respondEphemeral(s, ic, fmt.Sprintf("✅ 監視「%s」を一時停止しました。", wt.Label))
 	} else {
-		respondEphemeral(s, ic, "一時停止可能な監視が見つかりません。")
+		respondEphemeral(s, ic, "❌ 一時停止可能な状態ではありません。")
 	}
 }
 
-func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	u := interactionUser(ic)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, u.ID)
-	if wt != nil && wt.Status == models.WatchStatusPaused {
+func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	wt := w.resolveTargetWatch(ic, opts)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
+		return
+	}
+	if wt.Status == models.WatchStatusPaused {
 		wt.Status = models.WatchStatusActive
 		_ = w.storage.UpdateWatch(wt)
 		w.manager.ScheduleWatch(wt)
-		respondEphemeral(s, ic, "監視を再開しました。")
+		respondEphemeral(s, ic, fmt.Sprintf("✅ 監視「%s」を再開しました。", wt.Label))
 	} else {
-		respondEphemeral(s, ic, "再開可能な監視が見つかりません。")
+		respondEphemeral(s, ic, "❌ 再開可能な状態ではありません。")
 	}
 }
 
@@ -928,21 +1042,20 @@ func (w *WatchCommands) performDirectSettingsUpdate(s *discordgo.Session, ic *di
 	}
 }
 
-func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	u := interactionUser(ic)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, u.ID)
-	if wt != nil {
-		_ = w.deleteWatchAndCleanup(s, wt)
-		respondEphemeral(s, ic, "監視を削除しました。チャンネルとテンプレート画像も削除されました。")
-	} else {
-		respondEphemeral(s, ic, "削除可能な監視が見つかりません。")
+func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	wt := w.resolveTargetWatch(ic, opts)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
+		return
 	}
+	_ = w.deleteWatchAndCleanup(s, wt)
+	respondEphemeral(s, ic, fmt.Sprintf("✅ 監視「%s」を削除しました。", wt.Label))
 }
 
-func (w *WatchCommands) handleNowSlash(s *discordgo.Session, ic *discordgo.InteractionCreate) {
-	wt, _ := w.storage.GetWatchByChannel(ic.GuildID, ic.ChannelID)
+func (w *WatchCommands) handleNowSlash(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
+	wt := w.resolveTargetWatch(ic, opts)
 	if wt == nil {
-		respondEphemeral(s, ic, "このチャンネルに関連付けられた監視が見つかりません。")
+		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
 		return
 	}
 	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource})
