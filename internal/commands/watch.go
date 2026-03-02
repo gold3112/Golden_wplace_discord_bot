@@ -532,6 +532,9 @@ func (w *WatchCommands) processCreateRequest(s *discordgo.Session, ic *discordgo
 			},
 		},
 	}
+	if !isExternal {
+		msg.Content = fmt.Sprintf("👋 %s さんの監視チャンネルを作成しました。\n\n**ステップ1**: 監視タイプを選択してください。\n(最後に公開設定の選択があります)", user.Mention())
+	}
 	_, _ = s.ChannelMessageSendComplex(channelID, msg)
 	if isExternal {
 		respondEphemeral(s, ic, "このチャンネルを監視用に初期化しました。")
@@ -714,8 +717,10 @@ func (w *WatchCommands) handleFixButton(s *discordgo.Session, ic *discordgo.Inte
 		return
 	}
 	_ = w.storage.SaveTemplateImage(ic.GuildID, watchID+".png", data)
-	wt, _ := w.storage.GetUserWatch(ic.GuildID, interactionUser(ic).ID)
-	if wt != nil && wt.ID == watchID {
+	
+	// IDベースで確実に監視オブジェクトを取得（管理者の操作も考慮）
+	wt := w.getTargetWatch(ic, watchID)
+	if wt != nil {
 		wt.Template = watchID + ".png"
 		wt.PaletteFix = true
 		wt.PaletteFixSet = true
