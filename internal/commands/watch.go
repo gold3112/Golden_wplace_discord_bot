@@ -77,7 +77,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "status",
 				Description: "監視ステータスを表示",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 			{
@@ -90,7 +90,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "pause",
 				Description: "監視の一時停止",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 			{
@@ -98,7 +98,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "resume",
 				Description: "監視の再開",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 			{
@@ -106,7 +106,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "delete",
 				Description: "監視の削除",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 			{
@@ -114,7 +114,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "now",
 				Description: "指定または現在の監視を即時取得",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 			{
@@ -122,7 +122,7 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 				Name:        "settings",
 				Description: "現在の設定確認と変更",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: false},
+					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 					{Name: "origin", Description: "座標を変更 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
 					{Name: "template", Description: "テンプレート画像を変更", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
 					{Name: "threshold", Description: "通知閾値 (10%〜100%、10%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
@@ -139,9 +139,9 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "mod_delete",
-				Description: "[管理者専用] 指定ユーザーの監視を強制削除",
+				Description: "[管理者専用] 指定した監視を強制削除",
 				Options: []*discordgo.ApplicationCommandOption{
-					{Name: "user", Description: "対象ユーザー", Type: discordgo.ApplicationCommandOptionUser, Required: true},
+					{Name: "label", Description: "削除対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
 				},
 			},
 		},
@@ -1119,17 +1119,18 @@ func (w *WatchCommands) HandleChannelDelete(s *discordgo.Session, cd *discordgo.
 
 func (w *WatchCommands) handleModeratorDelete(s *discordgo.Session, ic *discordgo.InteractionCreate, options []*discordgo.ApplicationCommandInteractionDataOption) {
 	if !hasPermission(ic.Member, discordgo.PermissionManageChannels) {
-		respondEphemeral(s, ic, "モデレーター権限が必要です。")
+		respondEphemeral(s, ic, "❌ モデレーター権限が必要です。")
 		return
 	}
-	target := getOptionUserID(options, "user")
-	watch, _ := w.storage.GetUserWatch(ic.GuildID, target)
-	if watch != nil {
-		_ = w.deleteWatchAndCleanup(s, watch)
-		respondEphemeral(s, ic, fmt.Sprintf("ユーザー <@%s> の監視を削除しました。", target))
-	} else {
-		respondEphemeral(s, ic, "対象ユーザーの監視が見つかりません。")
+	
+	wt := w.resolveTargetWatch(ic, options)
+	if wt == nil {
+		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
+		return
 	}
+
+	_ = w.deleteWatchAndCleanup(s, wt)
+	respondEphemeral(s, ic, fmt.Sprintf("✅ 監視「%s」（所有者: <@%s>）を強制削除しました。", wt.Label, wt.OwnerID))
 }
 
 func getOptionString(opts []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
