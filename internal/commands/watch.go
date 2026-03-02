@@ -120,20 +120,9 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "settings",
-				Description: "現在の設定確認と変更",
+				Description: "監視設定の確認と変更",
 				Options: []*discordgo.ApplicationCommandOption{
 					{Name: "label", Description: "対象の作品名", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true, Required: true},
-					{Name: "origin", Description: "座標を変更 (例: 1818-806-989-358)", Type: discordgo.ApplicationCommandOptionString, Required: false},
-					{Name: "template", Description: "テンプレート画像を変更", Type: discordgo.ApplicationCommandOptionAttachment, Required: false},
-					{Name: "threshold", Description: "通知閾値 (10%〜100%、10%刻み)", Type: discordgo.ApplicationCommandOptionInteger, Required: false},
-					{Name: "type", Description: "タイプを変更", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "Progress (進捗追跡)", Value: "progress"},
-						{Name: "Vandal (荒らし検知)", Value: "vandal"},
-					}},
-					{Name: "visibility", Description: "公開設定を変更", Type: discordgo.ApplicationCommandOptionString, Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "Public (全体公開)", Value: "public"},
-						{Name: "Private (自分のみ)", Value: "private"},
-					}},
 				},
 			},
 			{
@@ -907,27 +896,9 @@ func (w *WatchCommands) handleResume(s *discordgo.Session, ic *discordgo.Interac
 }
 
 func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	u := interactionUser(ic)
-	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
-	
-	var wt *models.Watch
-	// 管理者の場合は、まず現在のチャンネルに紐付く監視を探す
-	if isAdmin {
-		wt, _ = w.storage.GetWatchByChannel(ic.GuildID, ic.ChannelID)
-	}
-	
-	// 見つからない、または一般ユーザーの場合は自分の監視を探す
+	wt := w.resolveTargetWatch(ic, opts)
 	if wt == nil {
-		wt, _ = w.storage.GetUserWatch(ic.GuildID, u.ID)
-	}
-
-	if wt == nil {
-		respondEphemeral(s, ic, "設定可能な監視が見つかりません。")
-		return
-	}
-
-	if len(opts) > 0 {
-		w.performDirectSettingsUpdate(s, ic, wt, opts)
+		respondEphemeral(s, ic, "❌ 設定可能な監視が見つからないか、操作権限がありません。")
 		return
 	}
 
@@ -935,7 +906,6 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		{Name: "監視タイプ", Value: string(wt.Type), Inline: true},
 		{Name: "通知閾値", Value: fmt.Sprintf("%.0f%%", wt.ThresholdPercent), Inline: true},
 	}
-	// 外部チャンネル（init）ではない場合のみ公開設定を表示
 	if !wt.IsExternalChannel {
 		fields = append(fields, &discordgo.MessageEmbedField{Name: "公開設定", Value: string(wt.Visibility), Inline: true})
 	}
@@ -946,7 +916,7 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 		Description: fmt.Sprintf("対象: **%s**\n所有者: <@%s>", wt.Label, wt.OwnerID),
 		Color:       0x5865F2,
 		Fields:      fields,
-		Footer:      &discordgo.MessageEmbedFooter{Text: "下のボタンから設定を個別に変更できます。"},
+		Footer:      &discordgo.MessageEmbedFooter{Text: "ボタンを押して設定を変更できます。"},
 	}
 
 	row1 := discordgo.ActionsRow{
@@ -956,13 +926,11 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 			discordgo.Button{Label: "画像変更", Style: discordgo.PrimaryButton, CustomID: w.makeButtonID("edit_template", wt.ID)},
 		},
 	}
-
 	row2 := discordgo.ActionsRow{
 		Components: []discordgo.MessageComponent{
 			discordgo.Button{Label: "タイプ切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_type", wt.ID)},
 		},
 	}
-	// 外部チャンネルではない場合のみ公開設定切替ボタンを追加
 	if !wt.IsExternalChannel {
 		row2.Components = append(row2.Components, discordgo.Button{Label: "公開設定切替", Style: discordgo.SecondaryButton, CustomID: w.makeButtonID("edit_vis", wt.ID)})
 	}
@@ -977,74 +945,15 @@ func (w *WatchCommands) handleSettings(s *discordgo.Session, ic *discordgo.Inter
 	})
 }
 
-// getTargetWatch ターゲットの監視を取得する共通ヘルパー
 func (w *WatchCommands) getTargetWatch(ic *discordgo.InteractionCreate, watchID string) *models.Watch {
-	u := interactionUser(ic)
 	isAdmin := hasPermission(ic.Member, discordgo.PermissionManageChannels)
-
-	// IDが一致するものを全読み込みから探す（確実な方法）
 	data, _ := w.storage.LoadGuildWatches(ic.GuildID)
 	for _, wt := range data.Watches {
 		if wt.ID == watchID {
-			// 所有者本人か、管理者であれば許可
-			if wt.OwnerID == u.ID || isAdmin {
-				return wt
-			}
+			if wt.OwnerID == interactionUser(ic).ID || isAdmin { return wt }
 		}
 	}
 	return nil
-}
-
-func (w *WatchCommands) performDirectSettingsUpdate(s *discordgo.Session, ic *discordgo.InteractionCreate, wt *models.Watch, opts []*discordgo.ApplicationCommandInteractionDataOption) {
-	updated := false
-	if origin := getOptionString(opts, "origin"); origin != "" {
-		if _, err := utils.ParseOrigin(origin); err == nil {
-			wt.Origin = origin
-			updated = true
-		}
-	}
-	if t := getOptionString(opts, "type"); t != "" {
-		wt.Type = models.WatchType(t)
-		updated = true
-	}
-	if v := getOptionString(opts, "visibility"); v != "" {
-		wt.Visibility = models.WatchVisibility(v)
-		if wt.Visibility == models.WatchVisibilityPublic {
-			_ = s.ChannelPermissionSet(wt.ChannelID, wt.GuildID, discordgo.PermissionOverwriteTypeRole, discordgo.PermissionViewChannel|discordgo.PermissionReadMessageHistory, discordgo.PermissionSendMessages)
-		} else {
-			_ = s.ChannelPermissionDelete(wt.ChannelID, wt.GuildID)
-		}
-		updated = true
-	}
-	if th := getOptionInt(opts, "threshold"); th > 0 {
-		if th >= 10 && th <= 100 && th%10 == 0 {
-			wt.ThresholdPercent = float64(th)
-			updated = true
-		}
-	}
-	if attID := getOptionAttachmentID(opts, "template"); attID != "" {
-		data := ic.ApplicationCommandData()
-		if data.Resolved != nil && data.Resolved.Attachments != nil {
-			if att, ok := data.Resolved.Attachments[attID]; ok {
-				d, err := w.downloadAttachment(att)
-				if err == nil {
-					_ = w.storage.SaveTemplateImage(wt.GuildID, wt.ID+".png", d)
-					wt.Template = wt.ID + ".png"
-					updated = true
-				}
-			}
-		}
-	}
-
-	if updated {
-		_ = w.storage.UpdateWatch(wt)
-		if wt.Status == models.WatchStatusActive {
-			w.manager.ScheduleWatch(wt)
-		}
-		respondEphemeral(s, ic, "✅ 監視設定を更新しました。")
-	} else {
-		respondEphemeral(s, ic, "❌ 有効な変更内容がありませんでした。")
-	}
 }
 
 func (w *WatchCommands) handleDelete(s *discordgo.Session, ic *discordgo.InteractionCreate, opts []*discordgo.ApplicationCommandInteractionDataOption) {
@@ -1093,9 +1002,7 @@ func (w *WatchCommands) sendWatchNowMessage(s *discordgo.Session, cID string, wt
 }
 
 func prepareWatchResultAssets(res *wplace.Result, emb *discordgo.MessageEmbed) []*discordgo.File {
-	if res == nil || len(res.PreviewPNG) == 0 {
-		return nil
-	}
+	if res == nil || len(res.PreviewPNG) == 0 { return nil }
 	emb.Image = &discordgo.MessageEmbedImage{URL: "attachment://p.png"}
 	return []*discordgo.File{{Name: "p.png", Reader: bytes.NewReader(res.PreviewPNG)}}
 }
@@ -1104,16 +1011,12 @@ func (w *WatchCommands) deleteWatchAndCleanup(s *discordgo.Session, watch *model
 	w.manager.RemoveWatch(watch.ID)
 	_ = w.storage.DeleteTemplateImage(watch.GuildID, watch.Template)
 	_ = w.storage.RemoveWatchRecord(watch.GuildID, watch.ID)
-	if !watch.IsExternalChannel {
-		_, _ = s.ChannelDelete(watch.ChannelID)
-	}
+	if !watch.IsExternalChannel { _, _ = s.ChannelDelete(watch.ChannelID) }
 	return nil
 }
 
 func (w *WatchCommands) HandleChannelDelete(s *discordgo.Session, cd *discordgo.ChannelDelete) {
-	if cd == nil || cd.Channel == nil || cd.Channel.GuildID == "" {
-		return
-	}
+	if cd == nil || cd.Channel == nil || cd.Channel.GuildID == "" { return }
 	watch, err := w.storage.GetWatchByChannel(cd.Channel.GuildID, cd.Channel.ID)
 	if err == nil && watch != nil {
 		w.manager.RemoveWatch(watch.ID)
@@ -1127,13 +1030,11 @@ func (w *WatchCommands) handleModeratorDelete(s *discordgo.Session, ic *discordg
 		respondEphemeral(s, ic, "❌ モデレーター権限が必要です。")
 		return
 	}
-	
 	wt := w.resolveTargetWatch(ic, options)
 	if wt == nil {
 		respondEphemeral(s, ic, "❌ 対象の監視が見つかりません。")
 		return
 	}
-
 	_ = w.deleteWatchAndCleanup(s, wt)
 	respondEphemeral(s, ic, fmt.Sprintf("✅ 監視「%s」（所有者: <@%s>）を強制削除しました。", wt.Label, wt.OwnerID))
 }
