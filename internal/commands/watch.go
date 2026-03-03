@@ -66,6 +66,14 @@ func (w *WatchCommands) Register(session *discordgo.Session, appID string) error
 		Options: []*discordgo.ApplicationCommandOption{
 			{
 				Type:        discordgo.ApplicationCommandOptionSubCommand,
+				Name:        "create",
+				Description: "新しい監視用チャンネルを作成して開始",
+				Options: []*discordgo.ApplicationCommandOption{
+					{Name: "label", Description: "監視の表示名", Type: discordgo.ApplicationCommandOptionString, Required: true},
+				},
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionSubCommand,
 				Name:        "init",
 				Description: "[管理者専用] このチャンネルを監視チャンネルとして初期化",
 				Options: []*discordgo.ApplicationCommandOption{
@@ -243,6 +251,8 @@ func (w *WatchCommands) handleApplicationCommand(s *discordgo.Session, ic *disco
 	case "watch":
 		sub := data.Options[0]
 		switch sub.Name {
+		case "create":
+			w.processCreateRequest(s, ic, watchCreateInput{Label: getOptionString(sub.Options, "label")}, false)
 		case "init":
 			w.handleInitCommand(s, ic, sub.Options)
 		case "status":
